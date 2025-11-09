@@ -46,6 +46,14 @@
 #include <limits>
 #include <iomanip>
 #include <cctype>
+#include <thread>
+#include <atomic>
+#include <csignal>
+#include <ctime>
+
+// graceful shutdown flag
+static std::atomic<bool> g_stop{false};
+static void handle_sigint(int) { g_stop = true; }
 
 namespace fs = std::filesystem;
 
@@ -480,8 +488,91 @@ static void printUsage(const char* prog) {
     "  --chmap <FILENAME>   Chmap filename under chmap/ (e.g., chmap_20251009.txt)\n"
     "                       Default: chmap_20251009.txt\n"
     "  --limit <N>          Process at most N files (0 = no limit; default 0)\n"
-    "  --dry-run <0|1>      List files that would be processed without running\n"
-    "                       Default: 0\n";
+    "  --dry-run <0|1>      List files to process without running (default 0)\n"
+    "  --watch <SEC>        Watch mode: rescan every SEC seconds until Ctrl-C (default 60)\n";
+}
+
+// One-shot scan and process. Returns number of processed files.
+static int scanAndProcess(const std::string& base,
+                          const std::string& chmapFile,
+                          int limit,
+                          bool dryRun)
+{
+  namespace fs = std::filesystem;
+
+  fs::path rootDir   = fs::path(base) / "rootfile";
+  fs::path csvDir    = fs::path(base) / "calibration" / "calibresult";
+  fs::path plotDir   = fs::path(base) / "calibration" / "plot";
+  fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
+
+  // Ensure output dirs exist
+  std::error_code ec;
+  fs::create_directories(csvDir, ec);
+  fs::create_directories(plotDir, ec);
+
+  // Collect .root files
+  std::vector<FileInfo> files;
+  if (!fs::exists(rootDir)) {
+    std::cerr << "[ERROR] rootDir does not exist: " << rootDir << "\n";
+    return 0;
+  }
+  for (const auto& de : fs::directory_iterator(rootDir)) {
+    if (!de.is_regular_file()) continue;
+    if (de.path().extension() != ".root") continue;
+    files.push_back(parseInfo(de));
+  }
+  if (files.empty()) {
+    std::cout << "[INFO] No .root files in " << rootDir << "\n";
+    return 0;
+  }
+
+  // Sort by run/segment/mtime
+  std::sort(files.begin(), files.end(), infoLess);
+
+  // Filter “unprocessed” (CSV missing)
+  std::vector<FileInfo> todo;
+  for (const auto& fi : files) {
+    const std::string infile = fi.base; // e.g., run00097_0_9999
+    fs::path outCsv = csvDir / ("calib_" + infile + ".csv");
+    if (!fileExists(outCsv)) todo.push_back(fi);
+  }
+
+  if (todo.empty()) {
+    std::cout << "[INFO] Nothing to do.\n";
+    return 0;
+  }
+
+  std::cout << "[INFO] To process (" << todo.size() << "):\n";
+  for (const auto& fi : todo) {
+    std::cout << "  - " << fi.path.filename().string()
+              << "  [run="      << (fi.parsed ? std::to_string(fi.run)      : "NA")
+              << ", segStart="  << (fi.parsed ? std::to_string(fi.segStart) : "NA")
+              << "]\n";
+  }
+
+  if (dryRun) {
+    std::cout << "[INFO] Dry-run: listing only.\n";
+    return 0;
+  }
+
+  int processed = 0;
+  for (const auto& fi : todo) {
+    if (g_stop) break;                 // allow graceful stop
+    if (limit > 0 && processed >= limit) break;
+
+    const std::string infile = fi.base;
+    const TString filename_inroot  = TString((fs::path(base) / "rootfile" / (infile + ".root")).string());
+    const TString filename_outcsv  = TString((fs::path(base) / "calibration" / "calibresult" / ("calib_" + infile + ".csv")).string());
+    const TString filename_outplot = TString((fs::path(base) / "calibration" / "plot" / ("calib_" + infile)).string());
+    const TString filename_chmap   = TString((fs::path(base) / "chmap" / chmapFile).string());
+
+    std::cout << "[RUN] " << infile << std::endl;
+    calibrayraw_(filename_inroot, filename_chmap, filename_outcsv, filename_outplot);
+    ++processed;
+  }
+
+  std::cout << "[DONE] Processed " << processed << " file(s).\n";
+  return processed;
 }
 
 
@@ -489,20 +580,20 @@ static void printUsage(const char* prog) {
 // Batch driver (main)
 // ---------------------------------------------
 int main(int argc, char** argv) {
-  // Defaults that match your environment
   std::string base = "/group/nu/ninja/work/otani/FROST_beamdata/test";
   std::string chmapFile = "chmap_20251009.txt";
-  int limit = 0;     // 0 = no limit
+  int limit = 0;
   bool dryRun = false;
+  int watchSec = 60;  // 0 => one-shot
 
-  // Parse CLI options
+  // handle Ctrl-C
+  std::signal(SIGINT, handle_sigint);
+  std::signal(SIGTERM, handle_sigint);
+
+  // ---- parse CLI ----
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
-
-    if (a == "-h" || a == "--help") {
-      printUsage(argv[0]);
-      return 0; // ヘルプ表示のみで終了
-    }
+    if (a == "-h" || a == "--help") { printUsage(argv[0]); return 0; }
 
     auto next = [&](int& i)->std::string {
       if (i + 1 < argc) return std::string(argv[++i]);
@@ -514,7 +605,8 @@ int main(int argc, char** argv) {
     if (a == "--base")        base      = next(i);
     else if (a == "--chmap")  chmapFile = next(i);
     else if (a == "--limit")  limit     = std::stoi(next(i));
-    else if (a == "--dry-run"){ std::string v = next(i); dryRun = (v == "1" || v == "true" || v == "yes"); }
+    else if (a == "--dry-run"){ std::string v = next(i); dryRun = (v=="1"||v=="true"||v=="yes"); }
+    else if (a == "--watch")  watchSec  = std::stoi(next(i));
     else {
       std::cerr << "Unknown option: " << a << "\n";
       printUsage(argv[0]);
@@ -522,89 +614,35 @@ int main(int argc, char** argv) {
     }
   }
 
-  fs::path rootDir   = fs::path(base) / "rootfile";
-  fs::path csvDir    = fs::path(base) / "calibration" / "calibresult";
-  fs::path plotDir   = fs::path(base) / "calibration" / "plot";
-  fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
+  std::cout << "[CFG] base=" << base
+            << " chmap=" << chmapFile
+            << " limit=" << limit
+            << " dryRun=" << (dryRun?1:0)
+            << " watch=" << watchSec << "s\n";
 
-  std::cout << "[CFG] base=" << base << "\n";
-  std::cout << "[CFG] rootDir=" << rootDir << "\n";
-  std::cout << "[CFG] csvDir=" << csvDir << "\n";
-  std::cout << "[CFG] plotDir=" << plotDir << "\n";
-  std::cout << "[CFG] chmap=" << chmapPath << "\n";
-  std::cout << "[CFG] limit=" << limit << " dryRun=" << (dryRun ? 1 : 0) << "\n";
-
-  // Ensure existence of output directories
-  std::error_code ec;
-  fs::create_directories(csvDir, ec);
-  fs::create_directories(plotDir, ec);
-
-  // Collect candidate .root files
-  std::vector<FileInfo> files;
-  if (!fs::exists(rootDir)) {
-    std::cerr << "[ERROR] rootDir does not exist: " << rootDir << "\n";
-    return 1;
-  }
-  for (const auto& de : fs::directory_iterator(rootDir)) {
-    if (!de.is_regular_file()) continue;
-    if (de.path().extension() != ".root") continue;
-    files.push_back(parseInfo(de));
-  }
-  if (files.empty()) {
-    std::cout << "[INFO] No .root files found in " << rootDir << "\n";
+  if (watchSec <= 0) {
+    // one-shot
+    (void)scanAndProcess(base, chmapFile, limit, dryRun);
     return 0;
   }
 
-  // Sort by run/segment/mtime
-  std::sort(files.begin(), files.end(), infoLess);
+  // watch mode
+  std::cout << "[WATCH] Start watching every " << watchSec << " seconds. Press Ctrl-C to stop.\n";
 
-  // Filter unprocessed (CSV missing)
-  std::vector<FileInfo> todo;
-  for (const auto& fi : files) {
-    std::string infile = fi.base; // e.g., run00097_0_9999
-    fs::path outCsv = csvDir / ("calib_" + infile + ".csv");
-    if (!fileExists(outCsv)) {
-      todo.push_back(fi);
+  while (!g_stop) {
+    // show timestamp
+    std::time_t now = std::time(nullptr);
+    std::cout << "\n[WATCH] Scan at " << std::put_time(std::localtime(&now), "%F %T") << std::endl;
+
+    (void)scanAndProcess(base, chmapFile, /*limit=*/0, /*dryRun=*/dryRun);
+    // In watch mode, limit is ignored (always process all pending)
+
+    // sleep in small chunks so Ctrl-C is responsive
+    for (int s = 0; s < watchSec && !g_stop; ++s) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }
 
-  if (todo.empty()) {
-    std::cout << "[INFO] All files already processed. Nothing to do.\n";
-    return 0;
-  }
-
-  std::cout << "[INFO] To process (" << todo.size() << "):\n";
-  for (const auto& fi : todo) {
-    std::cout << "  - " << fi.path.filename().string()
-              << "  [run=" << (fi.parsed ? std::to_string(fi.run) : "NA")
-              << ", segStart=" << (fi.parsed ? std::to_string(fi.segStart) : "NA")
-              << "]\n";
-  }
-
-  if (dryRun) {
-    std::cout << "[INFO] Dry-run enabled. Exiting without processing.\n";
-    return 0;
-  }
-
-  // Process up to limit
-  int processed = 0;
-  for (const auto& fi : todo) {
-    if (limit > 0 && processed >= limit) break;
-
-    const std::string infile = fi.base;
-    const TString filename_inroot = TString(fs::path(rootDir / (infile + ".root")).string());
-    const TString filename_outcsv = TString((csvDir / ("calib_" + infile + ".csv")).string());
-    const TString filename_outplot = TString((plotDir / ("calib_" + infile)).string());
-    const TString filename_chmap = TString(chmapPath.string());
-
-    std::cout << "[RUN] " << infile << "\n";
-    calibrayraw_(filename_inroot.Data(),
-                 filename_chmap.Data(),
-                 filename_outcsv.Data(),
-                 filename_outplot.Data());
-    ++processed;
-  }
-
-  std::cout << "[DONE] Processed " << processed << " file(s).\n";
+  std::cout << "\n[WATCH] Stopped.\n";
   return 0;
 }
