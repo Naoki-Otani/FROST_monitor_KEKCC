@@ -1,0 +1,21 @@
+# ビルドディレクトリ（CMakeやMakefile）
+build/
+build-*/
+
+# コンパイル済みバイナリやオブジェクトファイル
+*.o
+*.so
+*.a
+*.out
+*.exe
+
+# ROOTファイルやバイナリデータ
+*.root
+*.dat
+
+# 一時ファイルやキャッシュ
+*.pyc
+*.log
+*.tmp
+*.swp
+.DS_Store  # macOSの不要ファイル
