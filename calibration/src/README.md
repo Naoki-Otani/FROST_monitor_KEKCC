@@ -5,6 +5,12 @@ This tool provides an automated **batch calibration** for RAYRAW `.root` files u
 It scans the `rootfile/` directory for unprocessed ROOT files, calibrates them one by one, and outputs calibration results as **CSV** and **PDF plots**.  
 Optionally, it can **continuously watch** the directory and process new files as they appear.
 
+> **Safety against half-written ROOT files**  
+> Calibration now processes a ROOT file **only if all of the following are true**:  
+> - The file size is **at least 100 MB**  
+> - The file size has not changed for **at least 60 seconds**  
+> These conditions prevent processing files that are still being written by the DAQ or converter.
+
 ---
 
 ## Directory Layout (default)
@@ -81,6 +87,7 @@ This example re-scans every **600 seconds (10 minutes)**.
 ### Features
 
 - Detects new files added to `rootfile/`
+- Processes only files **≥100 MB** and **unchanged for ≥60 seconds**
 - Processes only those **without an existing CSV**
 - Skips already processed files automatically
 - Gracefully stops with **Ctrl-C**
@@ -91,9 +98,10 @@ Example output:
 ```
 [WATCH] Start watching every 600 seconds. Press Ctrl-C to stop.
 [WATCH] Scan at 2025-11-09 18:30:00
-[INFO] To process (2):
+[INFO] To process (2) (only files >= 100MB and stable for >= 60s are considered):
   - run00098_0_9999.root [run=98, segStart=0]
   - run00098_10000_19999.root [run=98, segStart=10000]
+  (size=123.4MB etc.)
 [RUN] run00098_0_9999
 ...
 [WATCH] Waiting 600 seconds...
@@ -122,12 +130,13 @@ The CSV columns:
 ## Logic Summary
 
 1. Scan the input `rootfile/` directory.
-2. Sort files by run number and segment start.
-3. Check if a corresponding CSV exists — skip if already processed.
-4. For each unprocessed file:
+2. Ignore files smaller than **100 MB** or whose size changed within the last **60 seconds**.
+3. Sort remaining files by run number and segment start.
+4. Check if a corresponding CSV exists — skip if already processed.
+5. For each unprocessed & ready file:
    - Perform waveform integration and peak fitting (0pe and 1pe)
    - Save plots and calibration CSV
-5. (Optional) Repeat automatically at intervals if `--watch` is specified.
+6. (Optional) Repeat automatically at intervals if `--watch` is specified.
 
 ---
 
@@ -175,6 +184,13 @@ This program (`convertlightyield.cpp`) compiles into a standalone ROOT-based too
 It automatically scans your calibration CSV directory and, **every 60 seconds by default,**
 converts any runs that have a calibration CSV but **do not yet have a converted ROOT file**.
 
+> **Safety against half-written calibration CSV files**  
+> `convertlightyield` now converts runs **only when the calibration CSV satisfies both**:
+> - CSV size is **at least 1 KB**
+> - CSV's size has not changed for **at least 60 seconds**  
+>  
+> This prevents conversion using incomplete or still-being-written calibration files.
+
 ---
 
 ## Directory Layout (defaults)
@@ -185,6 +201,7 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
   ├── rootfile_aftercalib/           # output ROOT (e.g., run00097_0_9999_lightyield.root)
   ├── chmap/
   │   └── chmap_20251009.txt         # default chmap
+  │   └── chmap_spillnum20251111.txt # spillnum bit → (RAYRAW, ch) map
   └── calibration/
       ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
       └── ReferenceGain/
@@ -227,6 +244,7 @@ Customize paths and files:
   --base /group/nu/ninja/work/otani/FROST_beamdata/test \
   --chmap chmap_20251009.txt \
   --refgain refgain.csv \
+  --spillchmap chmap_spillnum20251111.txt \
   --watch 120     # rescan interval (seconds)
 ```
 
@@ -237,6 +255,7 @@ Customize paths and files:
 | `--base <DIR>` | Base directory containing `rootfile/`, `rootfile_aftercalib/`, `calibration/`, `chmap/` | `/group/nu/ninja/work/otani/FROST_beamdata/test` |
 | `--chmap <FILE>` | Chmap file under `chmap/` | `chmap_20251009.txt` |
 | `--refgain <FILE>` | Reference gain CSV under `calibration/ReferenceGain/` | `ReferenceGain_fiberdif.csv` |
+| `--spillchmap <FILE>` | Spill-number bit mapping file under `chmap/` | `chmap_spillnum20251111.txt` |
 | `--watch <SEC>` | Rescan interval in seconds (0 = disabled) | `60` |
 | `--oneshot <0|1>` | If `1`, scan once and exit | `0` |
 | `-h`, `--help` | Show help | — |
@@ -251,10 +270,28 @@ The tool scans `calibration/calibresult/` for files named:
 calib_<RUNNAME>.csv
 ```
 
-If all of the following hold, it runs conversion for that `<RUNNAME>`:
+A run `<RUNNAME>` is **eligible for conversion** only if **all** of the following 3 conditions are satisfied:
 
-- `rootfile/<RUNNAME>.root` exists
-- `rootfile_aftercalib/<RUNNAME>_lightyield.root` **does not** exist (yet)
+1. **The calibration CSV is ready**  
+   - CSV file size is **at least 1 KB**, **and**  
+   - the size has not changed for **at least 60 seconds**  
+   → If too small or recently updated, it is assumed incomplete and skipped.
+
+2. **The corresponding input ROOT exists**  
+   ```
+   rootfile/<RUNNAME>.root
+   ```
+
+3. **The output (light-yield) ROOT does NOT already exist**  
+   ```
+   rootfile_aftercalib/<RUNNAME>_lightyield.root
+   ```
+
+If a CSV is not ready, the program reports something like:
+
+```
+[SKIP] CSV not ready (too small or recently updated): calib_run00097_0_9999.csv (size=512 bytes)
+```
 
 ---
 
@@ -268,11 +305,36 @@ For each run `<RUNNAME>`:
 - Output TTree (named `tree`) with branches:  
   - `cablenum[272]/I`, `rayraw[272]/I`, `rayrawch[272]/I`  
   - `lightyield[272][8]/D`, `unixtime[272]/D`  
+  - `spillnum/I`
   - `leading`, `trailing` (vector<vector<double>>)  
   - `leading_fromadc`, `trailing_fromadc` (computed from waveform threshold crossing)
 
 The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute per-channel light yield.
 
+### Spillnum reconstruction
+The file specified by `--spillchmap` contains:
+
+```
+#bit RAYRAW ch
+1 12 9
+2 12 10
+...
+15 12 23
+```
+
+For each listed `(RAYRAW, ch)`:
+
+- Look at the waveform of that channel  
+- If **≥ 5 samples ≥ 600 ADC**, the bit is **1**  
+- Otherwise, bit is **0**
+
+Bits are interpreted as:
+- bit1 → 2⁰  
+- bit2 → 2¹  
+- …  
+- bit15 → 2¹⁴
+
+All bits are combined into an integer and stored in `spillnum`.
 ---
 
 ## Help

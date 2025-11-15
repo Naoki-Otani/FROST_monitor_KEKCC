@@ -1,23 +1,23 @@
-// dataqualityplot.C
-// 目的:
-//   既存: 最新ラン番号の *_lightyield.root 群から
-//         leading / trailing / leading_fromadc / trailing_fromadc のヒストを更新（書き込み中は除外）
-//   追加: ① ch毎の「10 p.e.以上のlightyield平均」ヒスト（272エントリ）
-//        ② xg–yg の 2D ヒスト（バリセンタ、以前の実装に準拠）
-//        ③ evnum–unixtime のグラフ
+// dataqualityplot.cpp
+// Purpose:
+//   Standalone C++ (compiled) program using ROOT to generate data-quality plots.
+//   It mirrors and extends the previous ROOT macro version.
 //
-// 実行例:
-//   root -l -q 'dataqualityplot.C()'
-//   root -l -q 'dataqualityplot.C(-1, 60000)'  // 無限ループ, 60秒ごと更新
+// Major outputs (PDF):
+//   - Timing histograms (leading / trailing / leading_fromadc / trailing_fromadc) for latest run
+//   - Average lightyield per channel (>=10 p.e.) histogram for latest run
+//   - xg–yg 2D barycenter (latest run)
+//   - evnum vs unixtime (latest run)
+//   - evnum vs spillnum (latest run)
+//   - Average lightyield history 2D over all runs (6-hour bins) with incremental caching
 //
-// 出力 (timing: 変更なし):
-//   /group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/runXXXXX_<name>_hist.pdf
-//   <name> = leading | trailing | leading_fromadc | trailing_fromadc
+// Build example:
+//   g++ -O2 -std=c++17 dataqualityplot.cpp -o dataqualityplot $(root-config --cflags --libs)
 //
-// 出力 (追加分):
-//   ① ch平均LYヒスト: /group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/runXXXXX_chavg_lightyield_hist.pdf
-//   ② xg–yg 2Dヒスト: /group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/xgyg/runXXXXX_xgyg.pdf
-//   ③ evnum–unixtime:  /group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/unixtime/runXXXXX_evnum_vs_unixtime.pdf
+// Run examples:
+//   ./dataqualityplot                 // infinite loop, refresh 60s
+//   ./dataqualityplot -n 10          // 10 iterations
+//   ./dataqualityplot -n -1 -r 5000  // infinite loop, refresh every 5s
 
 #include <TFile.h>
 #include <TTree.h>
@@ -46,45 +46,49 @@
 #include <unordered_map>
 #include <fstream>
 #include <sstream>
+#include <ctime>
 #include <iomanip>
+
+// ------------------------
+// Global configuration
+// ------------------------
 
 static const char* TREE_NAME = "tree";
 
-// --- 既存 timing 用（変更なし）---
-// TDC (leading, trailing)
+// Timing hist settings
 static const int    NBINS_TDC = 2048;
 static const double XMIN_TDC  = 0.0;
 static const double XMAX_TDC  = 8192.0;
-// ADC (leading_fromadc, trailing_fromadc)
+
 static const int    NBINS_ADC = 400;
 static const double XMIN_ADC  = 0.0;
 static const double XMAX_ADC  = 400.0;
 
-// --- 追加分の定数 ---
+// Lightyield settings
 static const int    NOUT       = 272;
 static const int    NBUNCH     = 8;
-// ① ch平均 lightyield ヒスト（範囲は汎用的に 0〜400 p.e.）
+
 static const int    NBINS_LYAVG = 50;
 static const double XMIN_LYAVG  = 0.0;
 static const double XMAX_LYAVG  = 200.0;
-// ② xg–yg 2D ヒスト（以前の実装に準拠）
+
+// xg–yg settings
 static const int    XBINS_XY  = 132;
 static const int    YBINS_XY  = 140;
 static const double XMIN_XY   = -660.0;
 static const double XMAX_XY   =  660.0;
 static const double YMIN_XY   = -700.0;
 static const double YMAX_XY   =  700.0;
-// xg 重み（以前の実装と同義。必要なら変更可）
-static const double XG_WEIGHT = 4.0;
-// xgyg ヒストに入れるイベントの最小 light 最大値
-static const double LIGHTMAX_MIN = 10.0;
 
-// ---- Lightyield average history (全ラン・6時間ビン) ----
+static const double XG_WEIGHT = 4.0;        // weight exponent
+static const double LIGHTMAX_MIN = 10.0;    // threshold for xg–yg selection
+
+// 6-hour binning for LY history
 static const std::string PATH_LY_PROC  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/processed_files.tsv";
 static const std::string PATH_LY_BINS  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/chavg_bins.tsv";
-static const double BINW_SEC = 6.0 * 3600.0;  // 6 hours
+static const double BINW_SEC = 6.0 * 3600.0;
 
-// --- 入出力パス ---
+// I/O paths
 static const std::string PATH_ROOT     = "/group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/";
 static const std::string PATH_OUT_TDC  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/";
 static const std::string PATH_OUT_LY   = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/";
@@ -92,7 +96,9 @@ static const std::string PATH_OUT_XY   = "/group/nu/ninja/work/otani/FROST_beamd
 static const std::string PATH_OUT_UNIXTIME = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/unixtime/";
 static const std::string PATH_OUT_SPILLNUM = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/spillnum/";
 
-// --- ユーティリティ（既存＋追加）---
+// ------------------------
+// Utilities
+// ------------------------
 
 struct FileInfoLite {
   std::string path;
@@ -114,7 +120,7 @@ static bool IsLikelyStableFile(const std::string& path, int wait_ms = 500) {
 }
 
 static std::string ExtractRunTag(const std::string& fname) {
-  // 例: .../run00103_0_9999_lightyield.root -> run00103
+  // e.g. .../run00103_0_9999_lightyield.root -> run00103
   std::regex re("^((?:.*/)?)(run\\d{5})_\\d+_\\d+_lightyield\\.root$");
   std::smatch m;
   if (std::regex_match(fname, m, re)) return m[2].str();
@@ -138,7 +144,7 @@ static std::vector<FileInfoLite> ListLightyieldFiles(const std::string& dir) {
     if (GetPathInfo(path, id, sz, fl, mt)) out.push_back({path, sz, mt});
   }
   std::sort(out.begin(), out.end(), [](const FileInfoLite& a, const FileInfoLite& b){
-    return a.mtime > b.mtime; // 新しい順
+    return a.mtime > b.mtime;
   });
   return out;
 }
@@ -150,7 +156,31 @@ static std::vector<FileInfoLite> FilterByRun(const std::vector<FileInfoLite>& v,
   return out;
 }
 
-// --- 既存 timing ヒスト作成（変更なしのまま再掲） ---
+// Lightyield ROOT file readiness condition:
+//   - size >= 1 MB
+//   - file size stable (short check via IsLikelyStableFile)
+//   - last modification time older than 60 seconds
+static bool IsReadyLightyieldFile(const FileInfoLite& fi,
+                                  Long_t minSizeBytes = 1L * 1024 * 1024,
+                                  Long_t stableSec    = 60)
+{
+  // (1) minimum size
+  if (fi.size < minSizeBytes) return false;
+
+  // (2) quick stability check (~0.5 s)
+  if (!IsLikelyStableFile(fi.path, 500)) return false;
+
+  // (3) mtime older than stableSec
+  const Long_t nowSec = static_cast<Long_t>(time(nullptr));
+  if (nowSec - fi.mtime < stableSec) return false;
+
+  return true;
+}
+
+// ------------------------
+// Timing histograms
+// ------------------------
+
 static TH1D* CreateHistTiming(const char* hname, bool isTDC, const char* titlePrefix) {
   if (isTDC) {
     TH1D* h = new TH1D(hname, Form("%s;Time [0.833 ns];Number of events", titlePrefix), NBINS_TDC, XMIN_TDC, XMAX_TDC);
@@ -220,7 +250,6 @@ static void DrawAndSaveTiming(TH1D* h, const std::string& runTag, const char* na
   h->SetMinimum(0.5);
   h->Draw("HIST");
 
-  // ★ 既存の note レイアウトは変更しない
   TDatime now;
   TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
   note.SetFillColor(0);
@@ -235,8 +264,10 @@ static void DrawAndSaveTiming(TH1D* h, const std::string& runTag, const char* na
   c->SaveAs(outpdf);
 }
 
-// --- 追加① ch毎の10 p.e.以上平均 lightyield ---
-// 272 ch ぶんの平均値を算出（全イベント・全バンチのうち >=10 p.e. を平均。該当なしは0）
+// ------------------------
+// Average LY per channel
+// ------------------------
+
 static void AccumulateLyAvgPerChannel(std::vector<double>& sum, std::vector<int>& cnt, const std::string& path) {
   TFile fin(path.c_str(), "READ");
   if (fin.IsZombie()) return;
@@ -244,7 +275,6 @@ static void AccumulateLyAvgPerChannel(std::vector<double>& sum, std::vector<int>
   if (!t) { fin.Close(); return; }
 
   t->SetBranchStatus("*", 0);
-  // lightyield[272][8]
   Double_t ly[NOUT][NBUNCH];
   t->SetBranchStatus("lightyield", 1);
   t->SetBranchAddress("lightyield", ly);
@@ -269,17 +299,15 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
   h->SetStats(0);
   for (int ch = 0; ch < NOUT; ++ch) {
     const double avg = (cnt[ch] > 0) ? (sum[ch] / (double)cnt[ch]) : 0.0;
-    h->Fill(avg); // 272 回だけ Fill
+    h->Fill(avg);
   }
 
   gSystem->mkdir(PATH_OUT_LY.c_str(), true);
   TCanvas c("c_chavg_ly", "chavg ly", 1000, 700);
   c.SetGrid();
-  // c.SetLogy();          // 分布を見やすくする（必要なければ外してOK）
-  h->SetMinimum(0.5);   // 0ビン回避
+  h->SetMinimum(0.5);
   h->Draw("HIST");
 
-  // 小さめの注記
   TDatime now;
   TPaveText note(0.75, 0.80, 0.99, 0.9, "NDC");
   note.SetFillColor(0);
@@ -295,8 +323,10 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
   c.SaveAs(outpdf);
 }
 
-// --- 追加② xg–yg 2D バリセンタ ---
-// cablenum -> (x,y) 変換（以前の実装準拠）
+// ------------------------
+// xg–yg 2D barycenter
+// ------------------------
+
 static inline bool CableToPosition(int cablenum, double& x, double& y) {
   x = std::numeric_limits<double>::quiet_NaN();
   y = std::numeric_limits<double>::quiet_NaN();
@@ -324,7 +354,6 @@ static void AccumulateXY(TH2D* hXY, const std::string& path) {
   for (Long64_t ie = 0; ie < nent; ++ie) {
     t->GetEntry(ie);
 
-    // ★ 8バンチそれぞれで重心を計算
     for (int b = 0; b < NBUNCH; ++b) {
       double x_num = 0.0, x_den = 0.0;
       double y_num = 0.0, y_den = 0.0;
@@ -351,7 +380,6 @@ static void AccumulateXY(TH2D* hXY, const std::string& path) {
         }
       }
 
-      // ★ しきい値: lightmax_x>10 かつ lightmax_y>10
       const bool ok_den = (x_den > 0.0) || (y_den > 0.0);
       if (ok_den && (lightmax_x > LIGHTMAX_MIN) && (lightmax_y > LIGHTMAX_MIN)) {
         const double xg = (x_den > 0.0) ? (x_num / x_den) : std::numeric_limits<double>::quiet_NaN();
@@ -370,10 +398,8 @@ static void BuildAndSaveXY2D(const std::string& runTag, const std::vector<FileIn
                                      XBINS_XY, XMIN_XY, XMAX_XY,
                                      YBINS_XY, YMIN_XY, YMAX_XY));
 
-  // 2Dヒストを積算
   for (const auto& fi : stableFiles) AccumulateXY(hXY.get(), fi.path);
 
-  // 描画
   gStyle->SetOptStat(0);
   TCanvas c("c_xy", "xg-yg", 1000, 900);
   c.SetGrid();
@@ -381,24 +407,25 @@ static void BuildAndSaveXY2D(const std::string& runTag, const std::vector<FileIn
   hXY->Draw("COLZ");
   hXY->GetYaxis()->SetTitleOffset(1.1);
 
-  // ★ note を他と同様に追加（位置・サイズも合わせる）
   TDatime now;
   TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
   note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText(Form("entries: %.0f", hXY->GetEntries()));  // Fill回数（= xg,yg 点数）
+  note.AddText(Form("entries: %.0f", hXY->GetEntries()));
   note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
 
-  // 保存
   TString outpdf = TString::Format("%s%s_xgyg.pdf", PATH_OUT_XY.c_str(), runTag.c_str());
   c.SaveAs(outpdf);
 }
 
-// --- 追加③ evnum–unixtime グラフ ---
+// ------------------------
+// evnum vs unixtime
+// ------------------------
+
 static void AccumulateEvTime(std::vector<double>& v_ev, std::vector<double>& v_ut, const std::string& path) {
   TFile fin(path.c_str(), "READ");
   if (fin.IsZombie()) return;
@@ -407,7 +434,7 @@ static void AccumulateEvTime(std::vector<double>& v_ev, std::vector<double>& v_u
 
   t->SetBranchStatus("*", 0);
   Int_t   evnum = 0;
-  Double_t unixtime_arr[NOUT]; // 出力側は unixtime[272] で同値が複製されている想定
+  Double_t unixtime_arr[NOUT];
   t->SetBranchStatus("evnum", 1);
   t->SetBranchStatus("unixtime", 1);
   t->SetBranchAddress("evnum", &evnum);
@@ -416,7 +443,7 @@ static void AccumulateEvTime(std::vector<double>& v_ev, std::vector<double>& v_u
   const Long64_t nent = t->GetEntries();
   for (Long64_t ie = 0; ie < nent; ++ie) {
     t->GetEntry(ie);
-    const double ut = unixtime_arr[0]; // 272個同値なので先頭を使用
+    const double ut = unixtime_arr[0];
     if (std::isfinite(ut)) { v_ev.push_back((double)evnum); v_ut.push_back(ut); }
   }
   fin.Close();
@@ -439,10 +466,9 @@ static void BuildAndSaveEvTime(const std::string& runTag, const std::vector<File
 
   TCanvas c("c_evtime", "evnum vs unixtime", 1000, 700);
   c.SetGrid();
-  c.SetLeftMargin(0.15);   // デフォルト 0.1 → 少し広げる
+  c.SetLeftMargin(0.15);
   gr.Draw("AP");
 
-  // ★ note を他と同様に追加（位置・サイズも合わせる）
   TDatime now;
   TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
@@ -456,6 +482,10 @@ static void BuildAndSaveEvTime(const std::string& runTag, const std::vector<File
   TString outpdf = TString::Format("%s%s_evnum_vs_unixtime.pdf", PATH_OUT_UNIXTIME.c_str(), runTag.c_str());
   c.SaveAs(outpdf);
 }
+
+// ------------------------
+// evnum vs spillnum
+// ------------------------
 
 static void AccumulateEvSpillnum(std::vector<double>& v_ev, std::vector<double>& v_sn, const std::string& path) {
   TFile fin(path.c_str(), "READ");
@@ -474,8 +504,10 @@ static void AccumulateEvSpillnum(std::vector<double>& v_ev, std::vector<double>&
   const Long64_t nent = t->GetEntries();
   for (Long64_t ie = 0; ie < nent; ++ie) {
     t->GetEntry(ie);
-    const int sn = spillnum; // 272個同値なので先頭を使用
-    if (std::isfinite(sn)) { v_ev.push_back((double)evnum); v_sn.push_back(sn); }
+    const int sn = spillnum;
+    // spillnum is scalar; no need for isfinite()
+    v_ev.push_back((double)evnum);
+    v_sn.push_back((double)sn);
   }
   fin.Close();
 }
@@ -493,16 +525,14 @@ static void BuildAndSaveSpillnum(const std::string& runTag, const std::vector<Fi
   gr.SetTitle("evnum vs spillnum;evnum;spill number");
   gr.SetMarkerStyle(20);
   gr.SetMarkerSize(0.5);
-  gr.SetMinimum(0);       // Y軸の下限
-  gr.SetMaximum(35000);    // Y軸の上限
-
+  gr.SetMinimum(0);
+  gr.SetMaximum(35000);
   gr.GetYaxis()->SetTitleOffset(1.5);
 
-  TCanvas c("c_evtime", "evnum vs spillnum", 1000, 700);
+  TCanvas c("c_spill", "evnum vs spillnum", 1000, 700);
   c.SetGrid();
   gr.Draw("AP");
 
-  // ★ note を他と同様に追加（位置・サイズも合わせる）
   TDatime now;
   TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
@@ -517,15 +547,16 @@ static void BuildAndSaveSpillnum(const std::string& runTag, const std::vector<Fi
   c.SaveAs(outpdf);
 }
 
-// ---- 6hビン × ch の累積キャッシュ： (bin,ch) -> (sum, cnt) ----
+// ------------------------
+// 6-hour binned LY history
+// ------------------------
+
 struct SumCnt { double sum=0.0; long long cnt=0; };
 
-// フラットキー（bin と ch を 1つの文字列に）
 static inline std::string key_bin_ch(long long bin, int ch) {
   return std::to_string(bin) + "\t" + std::to_string(ch);
 }
 
-// 読み込み： chavg_bins.tsv
 static void LoadChAvgBins(std::unordered_map<std::string, SumCnt>& bins,
                           long long &bin_min, long long &bin_max)
 {
@@ -548,13 +579,11 @@ static void LoadChAvgBins(std::unordered_map<std::string, SumCnt>& bins,
   if (bin_min==std::numeric_limits<long long>::max()) { bin_min=0; bin_max=-1; }
 }
 
-// 書き出し： chavg_bins.tsv
 static void SaveChAvgBins(const std::unordered_map<std::string, SumCnt>& bins)
 {
   std::ofstream fout(PATH_LY_BINS, std::ios::trunc);
   fout << "#bin\tch\tsum\tcnt\n";
   for (const auto& kv : bins) {
-    // kv.first = "bin\tch"
     std::istringstream iss(kv.first);
     long long bin; int ch;
     iss >> bin >> ch;
@@ -563,7 +592,6 @@ static void SaveChAvgBins(const std::unordered_map<std::string, SumCnt>& bins)
   }
 }
 
-// 読み込み： processed_files.tsv  (path \t mtime)
 static void LoadProcessedFiles(std::unordered_map<std::string, Long_t>& seen)
 {
   seen.clear();
@@ -574,12 +602,11 @@ static void LoadProcessedFiles(std::unordered_map<std::string, Long_t>& seen)
     if (line.empty() || line[0]=='#') continue;
     std::istringstream iss(line);
     std::string path; Long_t mt=0;
-    if (!(iss >> std::quoted(path) >> mt)) continue; // パスはquoted対応
+    if (!(iss >> std::quoted(path) >> mt)) continue;
     seen[path] = mt;
   }
 }
 
-// 書き出し： processed_files.tsv
 static void SaveProcessedFiles(const std::unordered_map<std::string, Long_t>& seen)
 {
   std::ofstream fout(PATH_LY_PROC, std::ios::trunc);
@@ -589,7 +616,6 @@ static void SaveProcessedFiles(const std::unordered_map<std::string, Long_t>& se
   }
 }
 
-// 1ファイルを読み、6時間ビン×ch に >=10 p.e. の値を加算
 static void AccumulateBinsFromFile(std::unordered_map<std::string, SumCnt>& bins,
                                    const std::string& path)
 {
@@ -609,7 +635,6 @@ static void AccumulateBinsFromFile(std::unordered_map<std::string, SumCnt>& bins
   const Long64_t nent = t->GetEntries();
   for (Long64_t ie=0; ie<nent; ++ie) {
     t->GetEntry(ie);
-    // イベントの代表時間（全ch同値の想定）として unixtime[0] を使用
     const double ut = unixtime_arr[0];
     if (!std::isfinite(ut)) continue;
     const long long bin = (long long)std::floor(ut / BINW_SEC);
@@ -628,13 +653,10 @@ static void AccumulateBinsFromFile(std::unordered_map<std::string, SumCnt>& bins
   f.Close();
 }
 
-// 増分更新：新規（未処理）かつ安定なファイルだけ bins に反映し、キャッシュ保存
 static void UpdateLyAvgBinsIncremental()
 {
-  // ディレクトリ内の全 *_lightyield.root を列挙
   auto all = ListLightyieldFiles(PATH_ROOT);
 
-  // 既存キャッシュ読み込み
   std::unordered_map<std::string, SumCnt> bins;
   long long bin_min=0, bin_max=-1;
   LoadChAvgBins(bins, bin_min, bin_max);
@@ -645,12 +667,10 @@ static void UpdateLyAvgBinsIncremental()
   bool changed_bins=false, changed_seen=false;
 
   for (const auto& fi : all) {
-    // 書き込み中の可能性が少しでもあるならスキップ
-    if (!IsLikelyStableFile(fi.path, 500)) continue;
+    if (!IsReadyLightyieldFile(fi)) continue;
     auto it = seen.find(fi.path);
-    if (it != seen.end() && it->second == fi.mtime) continue; // 既に取り込み済み(同 mtime)
+    if (it != seen.end() && it->second == fi.mtime) continue;
 
-    // 新規または mtime 変化 → 取り込み（※同名再生成に対する差し戻しは実装簡略化のため未対応）
     AccumulateBinsFromFile(bins, fi.path);
     seen[fi.path] = fi.mtime;
     changed_bins = true;
@@ -663,39 +683,30 @@ static void UpdateLyAvgBinsIncremental()
 
 static void BuildAndSaveLyAvgHistory2D_Binned()
 {
-  // まず増分更新（未取り込みファイルがあれば bins に反映）
   UpdateLyAvgBinsIncremental();
 
-  // bins を読み出し
   std::unordered_map<std::string, SumCnt> bins;
   long long bin_min = 0, bin_max = -1;
   LoadChAvgBins(bins, bin_min, bin_max);
   if (bin_max < bin_min) return;
 
-  // X軸範囲（6hビン開始時刻の最小・最大）を bins から決定
   const double tmin = static_cast<double>(bin_min) * BINW_SEC;
-  const double tmax = (static_cast<double>(bin_max) + 1.0) * BINW_SEC; // 末尾ビンの終端
+  const double tmax = (static_cast<double>(bin_max) + 1.0) * BINW_SEC;
   const int nbx = std::max(1, static_cast<int>(bin_max - bin_min + 1));
 
-  // 2Dヒスト作成（Y軸は既存の ch-avg LY ヒストと同様）
   std::unique_ptr<TH2D> h(new TH2D(
       "h_lyavg_hist2d",
       "Average lightyield history;time;Average lightyield per channel (>=10 p.e.) [p.e.]",
       nbx, tmin, tmax,
       NBINS_LYAVG, XMIN_LYAVG, XMAX_LYAVG));
 
-  // 時間軸（JST表示・二段表記・重なり対策）
   h->GetXaxis()->SetTimeDisplay(1);
-  h->GetXaxis()->SetTimeOffset(0, "local");                 // ローカル時刻（JST）で表示
+  h->GetXaxis()->SetTimeOffset(0, "local");
   h->GetXaxis()->SetTimeFormat("#splitline{%Y-%m-%d}{%H:%M}");
-  // h->GetXaxis()->SetNdivisions(508, kTRUE);              // 必要なら目盛りを間引き
   h->GetXaxis()->SetLabelSize(0.03);
   h->GetXaxis()->SetLabelOffset(0.02);
   h->GetXaxis()->SetTitleOffset(1.3);
 
-  // 各 6h ビンについて：
-  //  - 1chでもデータがあれば、そのビンの全chを Fill（cnt==0 は avg=0 を入れる）
-  //  - 全chがデータなし（= ave=0）なら、そのビンは Fill しない
   long long npoints = 0;
   for (long long bin = bin_min; bin <= bin_max; ++bin) {
     bool any_data = false;
@@ -703,7 +714,7 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
       const auto it = bins.find(key_bin_ch(bin, ch));
       if (it != bins.end() && it->second.cnt > 0) { any_data = true; break; }
     }
-    if (!any_data) continue;  // この時間帯は全chデータなし → スキップ
+    if (!any_data) continue;
 
     const double t = static_cast<double>(bin) * BINW_SEC;
     for (int ch = 0; ch < NOUT; ++ch) {
@@ -717,7 +728,6 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
     }
   }
 
-  // 描画＆保存
   gSystem->mkdir(PATH_OUT_LY.c_str(), true);
   gStyle->SetOptStat(0);
 
@@ -726,16 +736,13 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   h->SetContour(99);
   h->Draw("COLZ");
   h->GetYaxis()->SetTitleOffset(1.1);
-  // c.SetBottomMargin(0.15);  // ラベルが見切れる場合に有効
-  // c.SetRightMargin(0.15);   // カラーバーが窮屈な場合に有効
 
-  // note（右上、既存の見た目に合わせる）
   TDatime now;
   TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
   note.AddText("run: ALL (6h bins)");
-  note.AddText(Form("entries: %lld", npoints)); // ≈ (#filled-bins) * 272
+  note.AddText(Form("entries: %lld", npoints));
   note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
@@ -745,74 +752,108 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   c.SaveAs(outpdf);
 }
 
+// ------------------------
+// Main loop
+// ------------------------
 
-// --- メイン監視ループ（既存の timing に追加出力を付与） ---
-void dataqualityplot(int max_loops = -1, int refresh_ms = 60000)
-{
-  // 出力ディレクトリ作成
+static void OneIteration(int refresh_ms) {
+  // Make sure output directories exist
   gSystem->mkdir(PATH_OUT_TDC.c_str(),  true);
   gSystem->mkdir(PATH_OUT_LY.c_str(),   true);
   gSystem->mkdir(PATH_OUT_XY.c_str(),   true);
   gSystem->mkdir(PATH_OUT_UNIXTIME.c_str(), true);
+  gSystem->mkdir(PATH_OUT_SPILLNUM.c_str(), true);
+
+  // List all files and decide latest run
+  auto all = ListLightyieldFiles(PATH_ROOT);
+  if (all.empty()) {
+    ::Info("dataqualityplot", "No *_lightyield.root yet in: %s", PATH_ROOT.c_str());
+    gSystem->Sleep(refresh_ms);
+    return;
+  }
+
+  std::string runTag = "";
+  for (const auto& fi : all) { runTag = ExtractRunTag(fi.path); if (!runTag.empty()) break; }
+  if (runTag.empty()) { gSystem->Sleep(refresh_ms); return; }
+
+  // Collect "ready" files for the latest run
+  auto runFiles = FilterByRun(all, runTag);
+  std::vector<FileInfoLite> stableFiles;
+  for (const auto& fi : runFiles) {
+    if (IsReadyLightyieldFile(fi)) stableFiles.push_back(fi);
+  }
+
+  if (stableFiles.empty()) {
+    ::Info("dataqualityplot",
+           "No ready *_lightyield.root for run %s "
+           "(require size >= 1MB and stable >= 60s).",
+           runTag.c_str());
+    gSystem->Sleep(refresh_ms);
+    return;
+  }
+
+  // Timing histograms
+  std::unique_ptr<TH1D> h_lead(CreateHistTiming("h_leading", true,  "Leading"));
+  std::unique_ptr<TH1D> h_trail(CreateHistTiming("h_trailing", true, "Trailing"));
+  std::unique_ptr<TH1D> h_lead_adc(CreateHistTiming("h_leading_adc", false,  "Leading_fromADC"));
+  std::unique_ptr<TH1D> h_trail_adc(CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC"));
+
+  for (const auto& fi : stableFiles) {
+    FillHistsTimingFromFile(h_lead.get(), h_trail.get(), h_lead_adc.get(), h_trail_adc.get(), fi.path);
+  }
+
+  DrawAndSaveTiming(h_lead.get(),      runTag, "leading");
+  DrawAndSaveTiming(h_trail.get(),     runTag, "trailing");
+  DrawAndSaveTiming(h_lead_adc.get(),  runTag, "leading_fromadc");
+  DrawAndSaveTiming(h_trail_adc.get(), runTag, "trailing_fromadc");
+
+  // Average LY per channel
+  std::vector<double> sum(NOUT, 0.0);
+  std::vector<int>    cnt(NOUT, 0);
+  for (const auto& fi : stableFiles) AccumulateLyAvgPerChannel(sum, cnt, fi.path);
+  BuildAndSaveLyAvgHist(sum, cnt, runTag);
+
+  // xg–yg
+  BuildAndSaveXY2D(runTag, stableFiles);
+
+  // evnum–unixtime
+  BuildAndSaveEvTime(runTag, stableFiles);
+
+  // evnum–spillnum
+  BuildAndSaveSpillnum(runTag, stableFiles);
+
+  // LY avg history 2D (all runs, 6h bins, incremental)
+  BuildAndSaveLyAvgHistory2D_Binned();
+
+  gSystem->Sleep(refresh_ms);
+}
+
+int main(int argc, char** argv) {
+  // Default: infinite loop; refresh 60s
+  int max_loops = -1;
+  int refresh_ms = 60000;
+
+  // Simple CLI parsing
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if ((a == "-n" || a == "--loops") && i+1 < argc) {
+      max_loops = std::stoi(argv[++i]);
+    } else if ((a == "-r" || a == "--refresh") && i+1 < argc) {
+      refresh_ms = std::stoi(argv[++i]);
+    } else if (a == "-h" || a == "--help") {
+      std::cout << "Usage: " << argv[0] << " [-n loops] [-r refresh_ms]\n"
+                << "  -n, --loops     Number of iterations; negative for infinite (default -1)\n"
+                << "  -r, --refresh   Refresh interval in milliseconds (default 60000)\n";
+      return 0;
+    }
+  }
 
   int iter = 0;
   while (max_loops < 0 || iter < max_loops) {
     ++iter;
-
-    // 最新ファイル群の取得
-    auto all = ListLightyieldFiles(PATH_ROOT);
-    if (all.empty()) {
-      ::Info("make_timing_hists_realtime_plus", "No *_lightyield.root yet in: %s", PATH_ROOT.c_str());
-      gSystem->Sleep(refresh_ms);
-      continue;
-    }
-
-    // 最新 run タグ
-    std::string runTag = "";
-    for (const auto& fi : all) { runTag = ExtractRunTag(fi.path); if (!runTag.empty()) break; }
-    if (runTag.empty()) { gSystem->Sleep(refresh_ms); continue; }
-
-    // 安定ファイルのみ
-    auto runFiles = FilterByRun(all, runTag);
-    std::vector<FileInfoLite> stableFiles;
-    for (const auto& fi : runFiles) if (IsLikelyStableFile(fi.path, 500)) stableFiles.push_back(fi);
-
-    // --- 既存4ヒスト ---
-    std::unique_ptr<TH1D> h_lead(CreateHistTiming("h_leading", true,  "Leading"));
-    std::unique_ptr<TH1D> h_trail(CreateHistTiming("h_trailing", true, "Trailing"));
-    std::unique_ptr<TH1D> h_lead_adc(CreateHistTiming("h_leading_adc", false,  "Leading_fromADC"));
-    std::unique_ptr<TH1D> h_trail_adc(CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC"));
-
-    for (const auto& fi : stableFiles) {
-      FillHistsTimingFromFile(h_lead.get(), h_trail.get(), h_lead_adc.get(), h_trail_adc.get(), fi.path);
-    }
-
-    DrawAndSaveTiming(h_lead.get(),      runTag, "leading");
-    DrawAndSaveTiming(h_trail.get(),     runTag, "trailing");
-    DrawAndSaveTiming(h_lead_adc.get(),  runTag, "leading_fromadc");
-    DrawAndSaveTiming(h_trail_adc.get(), runTag, "trailing_fromadc");
-
-    // --- 追加① ch平均 lightyield ---
-    std::vector<double> sum(NOUT, 0.0);
-    std::vector<int>    cnt(NOUT, 0);
-    for (const auto& fi : stableFiles) AccumulateLyAvgPerChannel(sum, cnt, fi.path);
-    BuildAndSaveLyAvgHist(sum, cnt, runTag);
-
-    // --- 追加② xg–yg 2D ---
-    BuildAndSaveXY2D(runTag, stableFiles);
-
-    // --- 追加③ evnum–unixtime ---
-    BuildAndSaveEvTime(runTag, stableFiles);
-
-    //evnum-spillnum
-    BuildAndSaveSpillnum(runTag, stableFiles);
-
-    // --- 追加④ lightyield average の 2Dヒスト（全ラン・6時間ビン、増分更新） ---
-    BuildAndSaveLyAvgHistory2D_Binned();
-
-
-    gSystem->Sleep(refresh_ms);
+    OneIteration(refresh_ms);
   }
 
-  ::Info("make_timing_hists_realtime_plus", "Stopped.");
+  ::Info("dataqualityplot", "Stopped.");
+  return 0;
 }

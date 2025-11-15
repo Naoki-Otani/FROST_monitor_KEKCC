@@ -46,6 +46,7 @@
 #include <csignal>
 #include <atomic>
 #include <thread>
+#include <cstdint>
 #include <iomanip>
 
 namespace fs = std::filesystem;
@@ -67,6 +68,9 @@ static const int NOUT         = 272;
 static const int NBUNCH       = 8;
 
 static const int BASEREF_CALIB_CABLENUM = 311;
+
+static const int SPILL_BIT_ADC_THRESHOLD = 600;
+static const int SPILL_BIT_MIN_POINTS    = 5;
 
 // -----------------------------
 // Utilities & Models
@@ -97,6 +101,34 @@ struct ChMaps { // rr: rayraw#, lc: local ch#
 
 static inline long long key_rr_lc(int rr, int lc) {
   return ( (long long)rr << 32 ) | (unsigned)lc;
+}
+
+struct SpillBitMap {
+  // key(rr,lc) → bit index (0-based; bit1→0, bit2→1, ...)
+  std::map<long long, int> rrLc_to_bit0;
+};
+
+static SpillBitMap load_spillmap(const char* fname) {
+  SpillBitMap m;
+  std::ifstream fin(fname);
+  if (!fin) {
+    ::Warning("load_spillmap", "Cannot open spill chmap: %s", fname);
+    return m;
+  }
+  std::string line;
+  bool first = true;
+  while (std::getline(fin, line)) {
+    if (line.empty()) continue;
+    if (line[0] == '#') { first = false; continue; }
+    if (first) { first = false; continue; } // ヘッダ行がある場合に備えて
+    std::istringstream iss(line);
+    int bit, rr, lc;
+    if (!(iss >> bit >> rr >> lc)) continue;
+    if (bit <= 0) continue;
+    int bit0 = bit - 1; // bit1 → 0 (2^0), bit2 → 1 (2^1), ...
+    m.rrLc_to_bit0[key_rr_lc(rr, lc)] = bit0;
+  }
+  return m;
 }
 
 static ChMaps load_chmap(const char* fname) {
@@ -225,6 +257,17 @@ static double integrate_adc_minus_baseline(const std::vector<double>& wf, double
   return integ;
 }
 
+static bool spillbit_from_waveform(const std::vector<double>& wf) {
+  int count = 0;
+  for (double v : wf) {
+    if (v >= SPILL_BIT_ADC_THRESHOLD) {
+      ++count;
+      if (count >= SPILL_BIT_MIN_POINTS) return true;
+    }
+  }
+  return false;
+}
+
 static std::vector<double> calculate_leading_fromadc(const std::vector<double>& wf) {
   std::vector<double> leading_adc;
   const int ns = (int)wf.size();
@@ -253,12 +296,14 @@ static std::vector<double> calculate_trailing_fromadc(const std::vector<double>&
 static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                                       const char* chmap_file,
                                       const char* referencegain_csv,
-                                      const char* rayrawcalib_csv)
+                                      const char* rayrawcalib_csv,
+                                      const char* spillchmap_file)
 {
   const auto CAB_ORDER = make_cab_order();
   const auto maps      = load_chmap(chmap_file);
   const auto refgain   = load_calibref(referencegain_csv);
   const auto calib     = load_calib(rayrawcalib_csv);
+  const auto spillmap  = load_spillmap(spillchmap_file);
 
   // Input ROOT
   TFile fin(infile, "READ");
@@ -290,6 +335,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   int    out_rayrawch[NOUT];
   double out_lightyield[NOUT][NBUNCH];
   double out_unixtime[NOUT];
+  int out_spillnum;
   auto   out_leading  = new std::vector<std::vector<double>>();
   auto   out_trailing = new std::vector<std::vector<double>>();
   auto   out_leading_fromadc  = new std::vector<std::vector<double>>();
@@ -301,6 +347,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   tout.Branch("rayrawch", out_rayrawch,  Form("rayrawch[%d]/I", NOUT));
   tout.Branch("lightyield", out_lightyield, Form("lightyield[%d][%d]/D",   NOUT, NBUNCH));
   tout.Branch("unixtime", out_unixtime,  Form("unixtime[%d]/D", NOUT));
+  tout.Branch("spillnum", &out_spillnum,  "spillnum/I");
   tout.Branch("leading",  &out_leading);
   tout.Branch("trailing", &out_trailing);
   tout.Branch("leading_fromadc",  &out_leading_fromadc);
@@ -338,6 +385,8 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
     out_evnum = evnum;
 
+    int spill_bits[15] = {0};
+
     if (waveform) {
       const int nChAll = (int)waveform->size();
       for (int ch = 0; ch < nChAll; ++ch) {
@@ -345,6 +394,18 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
         if (plane_id < 0) continue;
         const int rr = plane_id + 1;
         const int lc = ch % CH_PER_PLANE;
+
+        if (!spillmap.rrLc_to_bit0.empty()) {
+          auto itb = spillmap.rrLc_to_bit0.find(key_rr_lc(rr, lc));
+          if (itb != spillmap.rrLc_to_bit0.end()) {
+            int bit0 = itb->second;
+            if (bit0 >= 0 && bit0 < 15) {
+              const auto& wf_spill = waveform->at(ch);
+              bool is_one = spillbit_from_waveform(wf_spill);
+              spill_bits[bit0] = is_one ? 1 : 0;
+            }
+          }
+        }
 
         const int cab = cabOf(maps, rr, lc);
         if (cab < 0) continue;
@@ -402,7 +463,12 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
         if (trailing && (int)trailing->size() > ch) (*out_trailing)[idx] = trailing->at(ch);
       }
     }
-
+    out_spillnum = 0;
+    for (int ib = 0; ib < 15; ++ib) {
+      if (spill_bits[ib]) {
+        out_spillnum |= (1 << ib);  // bit1(2^0)〜bit15(2^14)
+      }
+    }
     tout.Fill();
   }
 
@@ -424,6 +490,7 @@ struct CsvItem {
   fs::path path;         // .../calibration/calibresult/calib_<RUN>.csv
   std::string run;       // <RUN>
   std::time_t mtime = 0;
+  std::uintmax_t size = 0; // file size in bytes
 };
 
 static std::vector<CsvItem> listCalibCsv(const fs::path& calibDir) {
@@ -443,6 +510,12 @@ static std::vector<CsvItem> listCalibCsv(const fs::path& calibDir) {
     std::error_code ec;
     auto ft = fs::last_write_time(p, ec);
     it.mtime = (!ec) ? filetime_to_time_t(ft) : 0;
+
+    std::error_code ec2;
+    auto fsize = fs::file_size(p, ec2);
+    if (!ec2) {
+      it.size = fsize;
+    } else it.size = 0;
     v.push_back(it);
   }
   std::sort(v.begin(), v.end(), [](const CsvItem& a, const CsvItem& b){
@@ -454,13 +527,19 @@ static std::vector<CsvItem> listCalibCsv(const fs::path& calibDir) {
 
 static int scanAndConvert(const std::string& base,
                           const std::string& chmapFile,
-                          const std::string& refgainCsv)
+                          const std::string& refgainCsv,
+                          const std::string& spillchmapFile)
 {
   const fs::path rootDir   = fs::path(base) / "rootfile";
   const fs::path outDir    = fs::path(base) / "rootfile_aftercalib";
   const fs::path calibDir  = fs::path(base) / "calibration" / "calibresult";
   const fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
   const fs::path refgainPath = fs::path(base) / "calibration" / "ReferenceGain" / refgainCsv;
+  const fs::path spillmapPath = fs::path(base) / "chmap" / spillchmapFile;
+
+  // CSV must be >= 1KB and "stable" (no update) for at least 60 seconds
+  constexpr std::uintmax_t MIN_CSV_SIZE_BYTES = 1024ull;
+  constexpr std::time_t    CSV_STABLE_SEC     = 60;
 
   std::error_code ec;
   fs::create_directories(outDir, ec);
@@ -471,8 +550,24 @@ static int scanAndConvert(const std::string& base,
     return 0;
   }
 
+  // current time for stability judgement
+  std::time_t now_t = std::time(nullptr);
+
   int converted = 0;
   for (const auto& ci : csvs) {
+    // --- CSV size & stability check ---
+    bool stable = false;
+    if (ci.size >= MIN_CSV_SIZE_BYTES && ci.mtime != 0) {
+      if (std::difftime(now_t, ci.mtime) >= CSV_STABLE_SEC) {
+        stable = true;
+      }
+    }
+    if (!stable) {
+      std::cout << "[SKIP] CSV not ready (too small or recently updated): "
+                << ci.path << " (size=" << ci.size << " bytes)\n";
+      continue;
+    }
+
     const std::string run = ci.run; // e.g., run00097_0_9999
     const fs::path inRoot  = rootDir   / (run + ".root");
     const fs::path outRoot = outDir    / (run + "_lightyield.root");
@@ -492,7 +587,8 @@ static int scanAndConvert(const std::string& base,
                               outRoot.string().c_str(),
                               chmapPath.string().c_str(),
                               refgainPath.string().c_str(),
-                              calibCsv.string().c_str());
+                              calibCsv.string().c_str(),
+                              spillmapPath.string().c_str());
     ++converted;
     if (g_stop) break;
   }
@@ -512,6 +608,7 @@ static void printUsage(const char* prog) {
     "                       Default: /group/nu/ninja/work/otani/FROST_beamdata/test\n"
     "  --chmap <FILENAME>   Chmap filename under chmap/ (default: chmap_20251009.txt)\n"
     "  --refgain <FILE>     Reference gain CSV under calibration/ReferenceGain/ (default: refgain.csv)\n"
+    "  --spillchmap <FILE>  Spillnum chmap filename under chmap/ (default: chmap_spillnum20251111.txt)\n"
     "  --watch <SEC>        Watch interval seconds (0 disables; default 60)\n"
     "  --oneshot <0|1>      If 1, run one scan and exit (default 0)\n";
 }
@@ -520,6 +617,7 @@ int main(int argc, char** argv) {
   std::string base = "/group/nu/ninja/work/otani/FROST_beamdata/test";
   std::string chmapFile = "chmap_20251009.txt";
   std::string refgainCsv = "ReferenceGain_fiberdif.csv";
+  std::string spillchmapFile = "chmap_spillnum20251111.txt";
   int watchSec = 60;    // default watch mode ON every 60s
   bool oneshot = false;
 
@@ -537,6 +635,7 @@ int main(int argc, char** argv) {
     if (a == "--base")        base       = next(i);
     else if (a == "--chmap")  chmapFile  = next(i);
     else if (a == "--refgain")refgainCsv = next(i);
+    else if (a == "--spillchmap") spillchmapFile = next(i);
     else if (a == "--watch")  watchSec   = std::stoi(next(i));
     else if (a == "--oneshot"){ std::string v = next(i); oneshot = (v=="1"||v=="true"||v=="yes"); }
     else { std::cerr << "Unknown option: " << a << "\n"; printUsage(argv[0]); return 1; }
@@ -545,11 +644,12 @@ int main(int argc, char** argv) {
   std::cout << "[CFG] base=" << base
             << " chmap=" << chmapFile
             << " refgain=" << refgainCsv
+            << " spillchmap=" << spillchmapFile
             << " watch=" << watchSec << "s"
             << " oneshot=" << (oneshot?1:0) << "\n";
 
   if (oneshot || watchSec <= 0) {
-    scanAndConvert(base, chmapFile, refgainCsv);
+    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile);
     return 0;
   }
 
@@ -557,7 +657,7 @@ int main(int argc, char** argv) {
   while (!g_stop) {
     std::time_t now = std::time(nullptr);
     std::cout << "\n[WATCH] Scan at " << std::put_time(std::localtime(&now), "%F %T") << std::endl;
-    scanAndConvert(base, chmapFile, refgainCsv);
+    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile);
 
     for (int s = 0; s < watchSec && !g_stop; ++s) {
       std::this_thread::sleep_for(std::chrono::seconds(1));

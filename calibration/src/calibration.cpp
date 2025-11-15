@@ -399,6 +399,7 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
 struct FileInfo {
   fs::path path;
   std::string base;   // runNNNNN[_start_end]
+  std::uintmax_t size = 0; // current file size in bytes
   int run = -1;
   long long segStart = -1; // parsed from _start_end
   std::time_t mtime = 0;
@@ -434,6 +435,15 @@ static FileInfo parseInfo(const fs::directory_entry& de) {
     info.mtime = filetime_to_time_t(ftime);
   } else {
     info.mtime = 0;
+  }
+
+  // size
+  std::error_code ec2;
+  auto fsize = fs::file_size(info.path, ec2);
+  if (!ec2) {
+    info.size = fsize;
+  } else {
+    info.size = 0;
   }
 
   const std::string name = info.path.filename().string();
@@ -505,6 +515,10 @@ static int scanAndProcess(const std::string& base,
   fs::path plotDir   = fs::path(base) / "calibration" / "plot";
   fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
 
+  // threshold: only files >= 100 MB and "stable" for >= 60 s
+  constexpr std::uintmax_t MIN_SIZE_BYTES = 100ull * 1024ull * 1024ull;
+  constexpr std::time_t    STABLE_SEC     = 60;
+
   // Ensure output dirs exist
   std::error_code ec;
   fs::create_directories(csvDir, ec);
@@ -529,9 +543,25 @@ static int scanAndProcess(const std::string& base,
   // Sort by run/segment/mtime
   std::sort(files.begin(), files.end(), infoLess);
 
+  // current time for "stability" judgement
+  std::time_t now_t = std::time(nullptr);
+
   // Filter “unprocessed” (CSV missing)
   std::vector<FileInfo> todo;
   for (const auto& fi : files) {
+    // --- size & stability check ---
+    // Require: size >= 100 MB AND last write (mtime) older than 60 s
+    bool stable = false;
+    if (fi.size >= MIN_SIZE_BYTES && fi.mtime != 0) {
+      if (std::difftime(now_t, fi.mtime) >= STABLE_SEC) {
+        stable = true;
+      }
+    }
+    if (!stable) {
+      // still being written (or too small) → skip this round
+      continue;
+    }
+
     const std::string infile = fi.base; // e.g., run00097_0_9999
     fs::path outCsv = csvDir / ("calib_" + infile + ".csv");
     if (!fileExists(outCsv)) todo.push_back(fi);
@@ -542,11 +572,13 @@ static int scanAndProcess(const std::string& base,
     return 0;
   }
 
-  std::cout << "[INFO] To process (" << todo.size() << "):\n";
+  std::cout << "[INFO] To process (" << todo.size() << ") "
+            << "(only files >= 100MB and stable for >= 60s are considered):\n";
   for (const auto& fi : todo) {
     std::cout << "  - " << fi.path.filename().string()
               << "  [run="      << (fi.parsed ? std::to_string(fi.run)      : "NA")
               << ", segStart="  << (fi.parsed ? std::to_string(fi.segStart) : "NA")
+              << ", size="      << (fi.size / (1024.0*1024.0)) << "MB"
               << "]\n";
   }
 
