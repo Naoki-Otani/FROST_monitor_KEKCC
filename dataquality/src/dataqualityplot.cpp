@@ -181,13 +181,13 @@ static bool IsReadyLightyieldFile(const FileInfoLite& fi,
 // Timing histograms
 // ------------------------
 
-static TH1D* CreateHistTiming(const char* hname, bool isTDC, const char* titlePrefix) {
+static TH1D* CreateHistTiming(const char* hname, bool isTDC, const char* titlePrefix, const char* xname) {
   if (isTDC) {
-    TH1D* h = new TH1D(hname, Form("%s;Time [0.833 ns];Number of events", titlePrefix), NBINS_TDC, XMIN_TDC, XMAX_TDC);
+    TH1D* h = new TH1D(hname, Form("%s;%s [0.833 ns];Number of events", titlePrefix, xname), NBINS_TDC, XMIN_TDC, XMAX_TDC);
     h->SetLineWidth(2);
     return h;
   } else {
-    TH1D* h = new TH1D(hname, Form("%s;Time [13.3 ns];Number of events", titlePrefix), NBINS_ADC, XMIN_ADC, XMAX_ADC);
+    TH1D* h = new TH1D(hname, Form("%s;%s [13.3 ns];Number of events", titlePrefix, xname), NBINS_ADC, XMIN_ADC, XMAX_ADC);
     h->SetLineWidth(2);
     return h;
   }
@@ -702,7 +702,7 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
 
   h->GetXaxis()->SetTimeDisplay(1);
   h->GetXaxis()->SetTimeOffset(0, "local");
-  h->GetXaxis()->SetTimeFormat("#splitline{%Y-%m-%d}{%H:%M}");
+  h->GetXaxis()->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
   h->GetXaxis()->SetLabelSize(0.03);
   h->GetXaxis()->SetLabelOffset(0.02);
   h->GetXaxis()->SetTitleOffset(1.3);
@@ -731,9 +731,10 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   gSystem->mkdir(PATH_OUT_LY.c_str(), true);
   gStyle->SetOptStat(0);
 
-  TCanvas c("c_lyavg_hist2d", "LY avg history (6h bins)", 1200, 800);
+  TCanvas c("c_lyavg_hist2d", "LY avg history (6h bins)", 2000, 800);
   c.SetGrid();
   h->SetContour(99);
+  h->GetXaxis()->SetNdivisions(520, kTRUE);
   h->Draw("COLZ");
   h->GetYaxis()->SetTitleOffset(1.1);
 
@@ -793,10 +794,10 @@ static void OneIteration(int refresh_ms) {
   }
 
   // Timing histograms
-  std::unique_ptr<TH1D> h_lead(CreateHistTiming("h_leading", true,  "Leading"));
-  std::unique_ptr<TH1D> h_trail(CreateHistTiming("h_trailing", true, "Trailing"));
-  std::unique_ptr<TH1D> h_lead_adc(CreateHistTiming("h_leading_adc", false,  "Leading_fromADC"));
-  std::unique_ptr<TH1D> h_trail_adc(CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC"));
+  std::unique_ptr<TH1D> h_lead(CreateHistTiming("h_leading", true,  "Leading","leading"));
+  std::unique_ptr<TH1D> h_trail(CreateHistTiming("h_trailing", true, "Trailing","trailing"));
+  std::unique_ptr<TH1D> h_lead_adc(CreateHistTiming("h_leading_adc", false,  "Leading_fromADC","leading_fromADC"));
+  std::unique_ptr<TH1D> h_trail_adc(CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC","trailing_fromADC"));
 
   for (const auto& fi : stableFiles) {
     FillHistsTimingFromFile(h_lead.get(), h_trail.get(), h_lead_adc.get(), h_trail_adc.get(), fi.path);
