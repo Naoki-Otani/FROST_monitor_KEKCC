@@ -144,7 +144,7 @@ axis->SetTimeOffset(9*3600, "gmt");
 
 ## Notes & tips
 
-- The program skips files that are likely still being written. A `*_lightyield.root` file is used only if it is at least **1 MB**, its size is stable in a short internal check (~500 ms), and its last modification time is at least **60 seconds** in the past.  
+- The program skips files that are likely still being written. A `*_lightyield.root` file is used only if it is at least **10 KB**, its size is stable in a short internal check (~500 ms), and its last modification time is at least **60 seconds** in the past.  
 - If you change directory paths, edit the `PATH_*` constants in the source code.
 - If labels overlap, consider increasing bottom margin or tweaking `SetNdivisions` and `SetLabelSize` on time axes.
 

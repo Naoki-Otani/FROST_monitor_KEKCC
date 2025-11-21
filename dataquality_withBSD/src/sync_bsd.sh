@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source /home/nu/notani/FROST_monitor/config/config.env
+
 # ===== Configuration =====
-SRC_DIR="/group/t2k/beam/exp/data/beam_summary/current/t2krun14"
-DST_DIR="/group/nu/ninja/work/otani/FROST_beamdata/test/bsd"
+SRC_DIR="$SRC_DIR_SYNCBSD"
+DST_DIR="$DST_DIR_SYNCBSD"
 INTERVAL_SECONDS=$((3 * 60))  # Check every 3 minutes
 
 # ===== Helper functions =====

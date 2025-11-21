@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source /home/nu/notani/FROST_monitor/config/config.env
+
 # Configuration
-DATA_DIR="/group/nu/ninja/work/otani/FROST_beamdata/test/datfile"
-OUT_DIR="/group/nu/ninja/work/otani/FROST_beamdata/test/latestdat_info"
+DATA_DIR="$DATA_DIR_UPDATELATESTDAT"
+OUT_DIR="$OUT_DIR_UPDATELATESTDAT"
 INTERVAL_SEC="${INTERVAL_SEC:-300}"   # Monitoring interval in seconds (default: 5 minutes)
 
 mkdir -p "$OUT_DIR"

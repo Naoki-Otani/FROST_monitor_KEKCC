@@ -51,6 +51,8 @@
 #include <csignal>
 #include <ctime>
 
+#include "/home/nu/notani/FROST_monitor/config/config.hpp"
+
 // graceful shutdown flag
 static std::atomic<bool> g_stop{false};
 static void handle_sigint(int) { g_stop = true; }
@@ -65,29 +67,29 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
   gROOT->SetBatch(kTRUE);
 
   // ---------- Input constants ----------
-  const Int_t N_RAYRAW = 11;          // plane count (1..11)
-  const Int_t N_CH_PER_PLANE = 32;    // channels per plane (0..31)
-  const Int_t HIST_NBIN = 200;
-  const Double_t HIST_XMIN = -100.;
-  const Double_t HIST_XMAX =  300.;
+  const Int_t N_RAYRAW = FrostmonConfig::N_RAYRAW;          // plane count (1..11)
+  const Int_t N_CH_PER_PLANE = FrostmonConfig::N_CH_PER_PLANE;    // channels per plane (0..31)
+  const Int_t HIST_NBIN = FrostmonConfig::HIST_NBIN;
+  const Double_t HIST_XMIN =  FrostmonConfig::HIST_XMIN;
+  const Double_t HIST_XMAX =  FrostmonConfig::HIST_XMAX;
 
   // Baseline estimation
-  const Int_t BL_WIN = 15;
-  const Int_t BL_START_MAX = 370;
-  const Int_t BL_STEP = 10;
+  const Int_t BL_WIN = FrostmonConfig::BL_WIN;
+  const Int_t BL_START_MAX = FrostmonConfig::BL_START_MAX;
+  const Int_t BL_STEP = FrostmonConfig::BL_STEP;
 
   // Integration windows
-  const Int_t INT_LEFT  = 20; // variable window: [peak-20, peak+25]
-  const Int_t INT_RIGHT = 25;
+  const Int_t INT_LEFT  = FrostmonConfig::INT_LEFT;
+  const Int_t INT_RIGHT = FrostmonConfig::INT_RIGHT;
 
   // Fixed window for 0pe: [FIX_START, FIX_START + FIX_RANGE)
-  const Int_t FIX_START = 1;
-  const Int_t FIX_RANGE = INT_LEFT + INT_RIGHT;
+  const Int_t FIX_START = FrostmonConfig::FIX_START;
+  const Int_t FIX_RANGE = FrostmonConfig::FIX_RANGE;
 
   // TSpectrum peak search (for 1pe)
-  const Int_t    PEAKS_MAX    = 2;
-  const Double_t SPEC_SIGMA   = 3.0;
-  const Double_t SPEC_THRESH  = 0.05;
+  const Int_t    PEAKS_MAX    = FrostmonConfig::PEAKS_MAX;
+  const Double_t SPEC_SIGMA   = FrostmonConfig::SPEC_SIGMA;
+  const Double_t SPEC_THRESH  = FrostmonConfig::SPEC_THRESH;
 
   // ---------- chmap load ----------
   std::map<long long, int> cabMap; // key = ((long long)rr << 32) | (unsigned)lc
@@ -515,8 +517,8 @@ static int scanAndProcess(const std::string& base,
   fs::path plotDir   = fs::path(base) / "calibration" / "plot";
   fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
 
-  // threshold: only files >= 100 MB and "stable" for >= 60 s
-  constexpr std::uintmax_t MIN_SIZE_BYTES = 100ull * 1024ull * 1024ull;
+  // threshold: only files >= 10 KB and "stable" for >= 60 s
+  constexpr std::uintmax_t MIN_SIZE_BYTES = 10ull * 1024ull;
   constexpr std::time_t    STABLE_SEC     = 60;
 
   // Ensure output dirs exist
@@ -612,8 +614,8 @@ static int scanAndProcess(const std::string& base,
 // Batch driver (main)
 // ---------------------------------------------
 int main(int argc, char** argv) {
-  std::string base = "/group/nu/ninja/work/otani/FROST_beamdata/test";
-  std::string chmapFile = "chmap_20251009.txt";
+  std::string base = FrostmonConfig::OUTPUT_DIR;
+  std::string chmapFile = FrostmonConfig::CHMAP_FILE;
   int limit = 0;
   bool dryRun = false;
   int watchSec = 60;  // 0 => one-shot

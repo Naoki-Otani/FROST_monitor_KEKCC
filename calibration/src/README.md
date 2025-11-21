@@ -7,7 +7,7 @@ Optionally, it can **continuously watch** the directory and process new files as
 
 > **Safety against half-written ROOT files**  
 > Calibration now processes a ROOT file **only if all of the following are true**:  
-> - The file size is **at least 100 MB**  
+> - The file size is **at least 10 KB**  
 > - The file size has not changed for **at least 60 seconds**  
 > These conditions prevent processing files that are still being written by the DAQ or converter.
 
@@ -87,7 +87,7 @@ This example re-scans every **600 seconds (10 minutes)**.
 ### Features
 
 - Detects new files added to `rootfile/`
-- Processes only files **≥100 MB** and **unchanged for ≥60 seconds**
+- Processes only files **≥10 KB** and **unchanged for ≥60 seconds**
 - Processes only those **without an existing CSV**
 - Skips already processed files automatically
 - Gracefully stops with **Ctrl-C**
@@ -130,7 +130,7 @@ The CSV columns:
 ## Logic Summary
 
 1. Scan the input `rootfile/` directory.
-2. Ignore files smaller than **100 MB** or whose size changed within the last **60 seconds**.
+2. Ignore files smaller than **10 KB** or whose size changed within the last **60 seconds**.
 3. Sort remaining files by run number and segment start.
 4. Check if a corresponding CSV exists — skip if already processed.
 5. For each unprocessed & ready file:

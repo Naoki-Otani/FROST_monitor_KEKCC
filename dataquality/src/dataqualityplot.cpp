@@ -48,6 +48,7 @@
 #include <sstream>
 #include <ctime>
 #include <iomanip>
+#include "/home/nu/notani/FROST_monitor/config/config.hpp"
 
 // ------------------------
 // Global configuration
@@ -56,45 +57,45 @@
 static const char* TREE_NAME = "tree";
 
 // Timing hist settings
-static const int    NBINS_TDC = 2048;
-static const double XMIN_TDC  = 0.0;
-static const double XMAX_TDC  = 8192.0;
+static const Int_t    NBINS_TDC = FrostmonConfig::NBINS_TDC;
+static const Double_t XMIN_TDC  = FrostmonConfig::XMIN_TDC;
+static const Double_t XMAX_TDC  = FrostmonConfig::XMAX_TDC;
 
-static const int    NBINS_ADC = 400;
-static const double XMIN_ADC  = 0.0;
-static const double XMAX_ADC  = 400.0;
+static const Int_t    NBINS_ADC = FrostmonConfig::NBINS_ADC;
+static const Double_t XMIN_ADC  = FrostmonConfig::XMIN_ADC;
+static const Double_t XMAX_ADC  = FrostmonConfig::XMAX_ADC;
 
 // Lightyield settings
-static const int    NOUT       = 272;
-static const int    NBUNCH     = 8;
+static const Int_t    NOUT       = FrostmonConfig::NOUT;
+static const Int_t    NBUNCH     = FrostmonConfig::NBUNCH;
 
-static const int    NBINS_LYAVG = 50;
-static const double XMIN_LYAVG  = 0.0;
-static const double XMAX_LYAVG  = 200.0;
+static const Int_t    NBINS_LYAVG = FrostmonConfig::NBINS_LYAVG;
+static const Double_t XMIN_LYAVG  = FrostmonConfig::XMIN_LYAVG;
+static const Double_t XMAX_LYAVG  = FrostmonConfig::XMAX_LYAVG;
 
 // xg–yg settings
-static const int    XBINS_XY  = 132;
-static const int    YBINS_XY  = 140;
-static const double XMIN_XY   = -660.0;
-static const double XMAX_XY   =  660.0;
-static const double YMIN_XY   = -700.0;
-static const double YMAX_XY   =  700.0;
+static const Int_t    XBINS_XY  = FrostmonConfig::XBINS_XY;
+static const Int_t    YBINS_XY  = FrostmonConfig::YBINS_XY;
+static const Double_t XMIN_XY   = FrostmonConfig::XMIN_XY;
+static const Double_t XMAX_XY   = FrostmonConfig::XMAX_XY;
+static const Double_t YMIN_XY   = FrostmonConfig::YMIN_XY;
+static const Double_t YMAX_XY   = FrostmonConfig::YMAX_XY;
 
-static const double XG_WEIGHT = 4.0;        // weight exponent
-static const double LIGHTMAX_MIN = 10.0;    // threshold for xg–yg selection
+static const Double_t XG_WEIGHT = FrostmonConfig::XG_WEIGHT;        // weight exponent
+static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN;    // threshold for xg–yg selection
 
 // 6-hour binning for LY history
-static const std::string PATH_LY_PROC  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/processed_files.tsv";
-static const std::string PATH_LY_BINS  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/chavg_bins.tsv";
-static const double BINW_SEC = 6.0 * 3600.0;
+static const std::string PATH_LY_PROC  = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/processed_files.tsv";
+static const std::string PATH_LY_BINS  = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/chavg_bins.tsv";
+static const Double_t BINW_SEC = FrostmonConfig::BINW_SEC;
 
 // I/O paths
-static const std::string PATH_ROOT     = "/group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/";
-static const std::string PATH_OUT_TDC  = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/";
-static const std::string PATH_OUT_LY   = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/";
-static const std::string PATH_OUT_XY   = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/xgyg/";
-static const std::string PATH_OUT_UNIXTIME = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/unixtime/";
-static const std::string PATH_OUT_SPILLNUM = "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/spillnum/";
+static const std::string PATH_ROOT     = FrostmonConfig::OUTPUT_DIR + "/rootfile_aftercalib/";
+static const std::string PATH_OUT_TDC  = FrostmonConfig::OUTPUT_DIR + "/dataquality/tdc/";
+static const std::string PATH_OUT_LY   = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/";
+static const std::string PATH_OUT_XY   = FrostmonConfig::OUTPUT_DIR + "/dataquality/xgyg/";
+static const std::string PATH_OUT_UNIXTIME = FrostmonConfig::OUTPUT_DIR + "/dataquality/unixtime/";
+static const std::string PATH_OUT_SPILLNUM = FrostmonConfig::OUTPUT_DIR + "/dataquality/spillnum/";
 
 // ------------------------
 // Utilities
@@ -157,11 +158,11 @@ static std::vector<FileInfoLite> FilterByRun(const std::vector<FileInfoLite>& v,
 }
 
 // Lightyield ROOT file readiness condition:
-//   - size >= 1 MB
+//   - size >= 10 KB
 //   - file size stable (short check via IsLikelyStableFile)
 //   - last modification time older than 60 seconds
 static bool IsReadyLightyieldFile(const FileInfoLite& fi,
-                                  Long_t minSizeBytes = 1L * 1024 * 1024,
+                                  Long_t minSizeBytes = 10L * 1024,
                                   Long_t stableSec    = 60)
 {
   // (1) minimum size

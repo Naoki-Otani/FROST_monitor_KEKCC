@@ -107,18 +107,19 @@
 #include <ctime>
 #include <regex>
 #include <memory>
+#include "/home/nu/notani/FROST_monitor/config/config.hpp"
 
 // ------------------------
 // Global configuration
 // ------------------------
 
 static const std::string PATH_BSD_DIR =
-  "/group/nu/ninja/work/otani/FROST_beamdata/test/bsd/";
+  FrostmonConfig::OUTPUT_DIR + "/bsd/";
 static const std::string PATH_LY_DIR  =
-  "/group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/";
+  FrostmonConfig::OUTPUT_DIR + "/rootfile_aftercalib/";
 
 static const std::string PATH_OUT_BASE =
-  "/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality_withBSD/";
+  FrostmonConfig::OUTPUT_DIR + "/dataquality_withBSD/";
 
 static const std::string PATH_POT_PLOT =
   PATH_OUT_BASE + "pot_plot/";
@@ -144,17 +145,15 @@ static const char* BSD_TREE_NAME  = "bsd";
 static const char* LY_TREE_NAME   = "tree";
 
 // file readiness
-static const Long_t MIN_LY_SIZE_BYTES = 1L * 1024 * 1024; // 1 MB
+static const Long_t MIN_LY_SIZE_BYTES = 10L * 1024; // 10 KB
 static const Long_t STABLE_SEC        = 60;               // consider stable if mtime older than 60 s
 
 // matching
-static const int SPILL_MOD = 32768;  // 2^15
-// static const int MAX_TIME_DIFF = 5;  // ±5 sec allowance between BSD and LY unixtime
+static const int SPILL_MOD = FrostmonConfig::SPILL_MOD; // 15-bit modulo for spillnum matching
 
-static const int MAX_TIME_DIFF = 31104000;  // ±5 sec allowance between BSD and LY unixtime
+static const int MAX_TIME_DIFF = FrostmonConfig::MAX_TIME_DIFF; // seconds
 
-static const double LIGHTMAX_MIN = 10.0; //threshold for neutrino event
-// static const double LIGHTMAX_MIN = 3.0; //threshold for neutrino event
+static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold for neutrino event
 
 // ------------------------
 // Small helpers

@@ -49,28 +49,30 @@
 #include <cstdint>
 #include <iomanip>
 
+#include "/home/nu/notani/FROST_monitor/config/config.hpp"
+
 namespace fs = std::filesystem;
 
 // -----------------------------
-// Parameters (copied from macro)
+// Parameters
 // -----------------------------
-static const int INT_RANGE = 75;
-static const int BL_WIN       = 15;
-static const int BL_START_MAX = 370;
-static const int BL_STEP      = 10;
+static const Int_t INT_RANGE = FrostmonConfig::INT_RANGE;
+static const Int_t BL_WIN       = FrostmonConfig::BL_WIN;
+static const Int_t BL_START_MAX = FrostmonConfig::BL_START_MAX;
+static const Int_t BL_STEP      = FrostmonConfig::BL_STEP;
 
-static const int SAMPLING_FIRST_BANCH = 10;   // integration start index for bunch#0
-static const int ADC_THRESHOLD = 520;
-static const double BUNCH_INTERVAL = 43.5;    // sampling ticks
+static const Int_t SAMPLING_FIRST_BANCH = FrostmonConfig::SAMPLING_FIRST_BANCH;   // integration start index for bunch#0
+static const Int_t ADC_THRESHOLD = FrostmonConfig::ADC_THRESHOLD; //threshold for leading/trailing_fromadc
+static const Double_t BUNCH_INTERVAL = FrostmonConfig::BUNCH_INTERVAL;
 
-static const int CH_PER_PLANE = 32;
-static const int NOUT         = 272;
-static const int NBUNCH       = 8;
+static const Int_t CH_PER_PLANE = FrostmonConfig::N_CH_PER_PLANE;
+static const Int_t NOUT         = FrostmonConfig::NOUT;
+static const Int_t NBUNCH       = FrostmonConfig::NBUNCH;
 
-static const int BASEREF_CALIB_CABLENUM = 311;
+static const Int_t BASEREF_CALIB_CABLENUM = FrostmonConfig::BASEREF_CALIB_CABLENUM;
 
-static const int SPILL_BIT_ADC_THRESHOLD = 600;
-static const int SPILL_BIT_MIN_POINTS    = 5;
+static const Int_t SPILL_BIT_ADC_THRESHOLD = FrostmonConfig::SPILL_BIT_ADC_THRESHOLD;
+static const Int_t SPILL_BIT_MIN_POINTS    = FrostmonConfig::SPILL_BIT_MIN_POINTS;
 
 // -----------------------------
 // Utilities & Models
@@ -614,10 +616,10 @@ static void printUsage(const char* prog) {
 }
 
 int main(int argc, char** argv) {
-  std::string base = "/group/nu/ninja/work/otani/FROST_beamdata/test";
-  std::string chmapFile = "chmap_20251009.txt";
-  std::string refgainCsv = "ReferenceGain_fiberdif.csv";
-  std::string spillchmapFile = "chmap_spillnum20251111.txt";
+  std::string base = FrostmonConfig::OUTPUT_DIR;
+  std::string chmapFile = FrostmonConfig::CHMAP_FILE;
+  std::string refgainCsv = FrostmonConfig::REFGAIN_CSV;
+  std::string spillchmapFile = FrostmonConfig::SPILL_CHMAP_FILE;
   int watchSec = 60;    // default watch mode ON every 60s
   bool oneshot = false;
 
