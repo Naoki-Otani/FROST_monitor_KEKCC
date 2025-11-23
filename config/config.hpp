@@ -5,7 +5,8 @@
 namespace FrostmonConfig {
 // ----- Path configurations -----
     const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/test";
-    const std::string CHMAP_FILE = "chmap_20251009.txt";
+    // const std::string CHMAP_FILE = "chmap_20251009.txt";
+    const std::string CHMAP_FILE = "chmap_20251122.txt";
     const std::string REFGAIN_CSV = "ReferenceGain_fiberdif.csv";
     const std::string SPILL_CHMAP_FILE = "chmap_spillnum20251111.txt";
 
