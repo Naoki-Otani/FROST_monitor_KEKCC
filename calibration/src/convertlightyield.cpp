@@ -105,6 +105,11 @@ static inline long long key_rr_lc(int rr, int lc) {
   return ( (long long)rr << 32 ) | (unsigned)lc;
 }
 
+struct LightYieldCorrMap {
+  // cab → correction_factor
+  std::map<int, double> cab_to_corr;
+};
+
 struct SpillBitMap {
   // key(rr,lc) → bit index (0-based; bit1→0, bit2→1, ...)
   std::map<long long, int> rrLc_to_bit0;
@@ -228,6 +233,29 @@ static RayrawCalibMap load_calib(const char* fname) {
   return m;
 }
 
+static LightYieldCorrMap load_lightyield_corr(const char* fname) {
+  LightYieldCorrMap m;
+  std::ifstream fin(fname);
+  if (!fin) {
+    ::Warning("load_lightyield_corr", "Cannot open lightyield correction CSV: %s", fname);
+    return m;
+  }
+  std::string line;
+  bool first = true;
+  while (std::getline(fin, line)) {
+    if (line.empty()) continue;
+    if (line[0] == '#') { first = false; continue; }
+    if (first) { first = false; continue; }
+    for (char &c : line) if (c == ',') c = ' ';
+    std::istringstream iss(line);
+    int cab = -1;
+    double corr = 1.0;
+    if (!(iss >> cab >> corr)) continue;
+    m.cab_to_corr[cab] = corr;
+  }
+  return m;
+}
+
 static double estimate_baseline(const std::vector<double>& wf) {
   const int ns = (int)wf.size();
   if (ns <= 0) return 0.0;
@@ -299,6 +327,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                                       const char* chmap_file,
                                       const char* referencegain_csv,
                                       const char* rayrawcalib_csv,
+                                      const char* lycorr_csv,
                                       const char* spillchmap_file)
 {
   const auto CAB_ORDER = make_cab_order();
@@ -306,6 +335,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   const auto refgain   = load_calibref(referencegain_csv);
   const auto calib     = load_calib(rayrawcalib_csv);
   const auto spillmap  = load_spillmap(spillchmap_file);
+  const auto lycorr    = load_lightyield_corr(lycorr_csv);
 
   // Input ROOT
   TFile fin(infile, "READ");
@@ -449,11 +479,17 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
           m0_ref_base = it->second.first; m1_ref_base = it->second.second;
         }
 
+        double corr_factor = 1.0;
+        if (auto it = lycorr.cab_to_corr.find(cab); it != lycorr.cab_to_corr.end()) {
+          corr_factor = it->second;
+        }
+
         for(int bunch=0; bunch<NBUNCH; ++bunch){
-          out_lightyield[idx][bunch] =
+          const double ly_raw =
             (adcint[bunch] - zero_pe * (double)(INT_RANGE)/(double)intrange_calib)
             * (m1_ref_base - m0_ref_base)
             / ((one_pe_base - zero_pe_base) * (m1_ref - m0_ref));
+          out_lightyield[idx][bunch] = ly_raw * corr_factor;
         }
 
         // leading/trailing_fromadc
@@ -530,13 +566,15 @@ static std::vector<CsvItem> listCalibCsv(const fs::path& calibDir) {
 static int scanAndConvert(const std::string& base,
                           const std::string& chmapFile,
                           const std::string& refgainCsv,
-                          const std::string& spillchmapFile)
+                          const std::string& spillchmapFile,
+                          const std::string& lycorrCsv)
 {
   const fs::path rootDir   = fs::path(base) / "rootfile";
   const fs::path outDir    = fs::path(base) / "rootfile_aftercalib";
   const fs::path calibDir  = fs::path(base) / "calibration" / "calibresult";
   const fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
   const fs::path refgainPath = fs::path(base) / "calibration" / "ReferenceGain" / refgainCsv;
+  const fs::path lycorrPath  = fs::path(base) / "calibration" / "lightyield_correctionfactor" /lycorrCsv;
   const fs::path spillmapPath = fs::path(base) / "chmap" / spillchmapFile;
 
   // CSV must be >= 1KB and "stable" (no update) for at least 60 seconds
@@ -590,6 +628,7 @@ static int scanAndConvert(const std::string& base,
                               chmapPath.string().c_str(),
                               refgainPath.string().c_str(),
                               calibCsv.string().c_str(),
+                              lycorrPath.string().c_str(),
                               spillmapPath.string().c_str());
     ++converted;
     if (g_stop) break;
@@ -611,6 +650,7 @@ static void printUsage(const char* prog) {
     "  --chmap <FILENAME>   Chmap filename under chmap/ (default: chmap_20251009.txt)\n"
     "  --refgain <FILE>     Reference gain CSV under calibration/ReferenceGain/ (default: refgain.csv)\n"
     "  --spillchmap <FILE>  Spillnum chmap filename under chmap/ (default: chmap_spillnum20251111.txt)\n"
+    "  --lycorr <FILE>      Lightyield correction CSV under calibration/lightyield_correctionfactor (default: lightyield_correctionfactor.csv)\n"
     "  --watch <SEC>        Watch interval seconds (0 disables; default 60)\n"
     "  --oneshot <0|1>      If 1, run one scan and exit (default 0)\n";
 }
@@ -620,6 +660,7 @@ int main(int argc, char** argv) {
   std::string chmapFile = FrostmonConfig::CHMAP_FILE;
   std::string refgainCsv = FrostmonConfig::REFGAIN_CSV;
   std::string spillchmapFile = FrostmonConfig::SPILL_CHMAP_FILE;
+  std::string lycorrCsv = FrostmonConfig::LIGHTYIELD_CORR_CSV;
   int watchSec = 60;    // default watch mode ON every 60s
   bool oneshot = false;
 
@@ -638,6 +679,7 @@ int main(int argc, char** argv) {
     else if (a == "--chmap")  chmapFile  = next(i);
     else if (a == "--refgain")refgainCsv = next(i);
     else if (a == "--spillchmap") spillchmapFile = next(i);
+    else if (a == "--lycorr") lycorrCsv  = next(i);
     else if (a == "--watch")  watchSec   = std::stoi(next(i));
     else if (a == "--oneshot"){ std::string v = next(i); oneshot = (v=="1"||v=="true"||v=="yes"); }
     else { std::cerr << "Unknown option: " << a << "\n"; printUsage(argv[0]); return 1; }
@@ -647,11 +689,12 @@ int main(int argc, char** argv) {
             << " chmap=" << chmapFile
             << " refgain=" << refgainCsv
             << " spillchmap=" << spillchmapFile
+            << " lycorr=" << lycorrCsv
             << " watch=" << watchSec << "s"
             << " oneshot=" << (oneshot?1:0) << "\n";
 
   if (oneshot || watchSec <= 0) {
-    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile);
+    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile, lycorrCsv);
     return 0;
   }
 
@@ -659,7 +702,7 @@ int main(int argc, char** argv) {
   while (!g_stop) {
     std::time_t now = std::time(nullptr);
     std::cout << "\n[WATCH] Scan at " << std::put_time(std::localtime(&now), "%F %T") << std::endl;
-    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile);
+    scanAndConvert(base, chmapFile, refgainCsv, spillchmapFile, lycorrCsv);
 
     for (int s = 0; s < watchSec && !g_stop; ++s) {
       std::this_thread::sleep_for(std::chrono::seconds(1));

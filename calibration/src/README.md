@@ -203,7 +203,8 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
   │   └── chmap_20251009.txt         # default chmap
   │   └── chmap_spillnum20251111.txt # spillnum bit → (RAYRAW, ch) map
   └── calibration/
-      ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
+  ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
+      ├── lightyield_correctionfactor.csv           # per-cable light-yield correction factors
       └── ReferenceGain/
           └── ReferenceGain_fiberdif.csv            # reference gain CSV (configurable)
 ```
@@ -244,6 +245,7 @@ Customize paths and files:
   --base /group/nu/ninja/work/otani/FROST_beamdata/test \
   --chmap chmap_20251009.txt \
   --refgain refgain.csv \
+  --lycorr lightyield_correctionfactor.csv \
   --spillchmap chmap_spillnum20251111.txt \
   --watch 120     # rescan interval (seconds)
 ```
@@ -255,6 +257,7 @@ Customize paths and files:
 | `--base <DIR>` | Base directory containing `rootfile/`, `rootfile_aftercalib/`, `calibration/`, `chmap/` | `/group/nu/ninja/work/otani/FROST_beamdata/test` |
 | `--chmap <FILE>` | Chmap file under `chmap/` | `chmap_20251009.txt` |
 | `--refgain <FILE>` | Reference gain CSV under `calibration/ReferenceGain/` | `ReferenceGain_fiberdif.csv` |
+| `--lycorr <FILE>` | Light-yield correction CSV under `calibration/` | `lightyield_correctionfactor.csv` |
 | `--spillchmap <FILE>` | Spill-number bit mapping file under `chmap/` | `chmap_spillnum20251111.txt` |
 | `--watch <SEC>` | Rescan interval in seconds (0 = disabled) | `60` |
 | `--oneshot <0|1>` | If `1`, scan once and exit | `0` |
@@ -309,7 +312,28 @@ For each run `<RUNNAME>`:
   - `leading`, `trailing` (vector<vector<double>>)  
   - `leading_fromadc`, `trailing_fromadc` (computed from waveform threshold crossing)
 
-The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute per-channel light yield.
+The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute **raw** per-channel light yield,
+which is then multiplied by a **per-cable correction factor** from `lightyield_correctionfactor.csv`.
+
+### Light-yield correction factor
+
+The file `lightyield_correctionfactor.csv` has the format:
+
+```text
+#cablenum,correction_factor
+1,1.04164
+2,1.15779
+...
+```
+
+For each `cablenum`:
+
+- First, the raw light yield is computed from the calibrated ADC integral and reference gain information.
+- Then, the stored `lightyield` is:
+
+  \[
+    \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
+  \]
 
 ### Spillnum reconstruction
 The file specified by `--spillchmap` contains:
