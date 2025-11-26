@@ -16,7 +16,7 @@ Optionally, it can **continuously watch** the directory and process new files as
 ## Directory Layout (default)
 
 ```
-/group/nu/ninja/work/otani/FROST_beamdata/test/
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/
   ├── rootfile/                  # input ROOT files (e.g., run00097_0_9999.root)
   ├── calibration/
   │   ├── calibresult/           # output CSV (e.g., calib_run00097_0_9999.csv)
@@ -55,7 +55,7 @@ You can specify options manually:
 
 ```bash
 ./calibration \
-  --base /group/nu/ninja/work/otani/FROST_beamdata/test \
+  --base /group/nu/ninja/work/otani/FROST_beamdata/e71c \
   --chmap chmap_20251009.txt \
   --limit 0 \
   --dry-run 0
@@ -65,7 +65,7 @@ You can specify options manually:
 
 | Option | Description | Default |
 |:--------|:-------------|:---------|
-| `--base <DIR>` | Base directory (must contain `rootfile/`, `calibration/`, `chmap/`) | `/group/nu/ninja/work/otani/FROST_beamdata/test` |
+| `--base <DIR>` | Base directory (must contain `rootfile/`, `calibration/`, `chmap/`) | `/group/nu/ninja/work/otani/FROST_beamdata/e71c` |
 | `--chmap <FILENAME>` | Channel map file inside `chmap/` | `chmap_20251009.txt` |
 | `--limit <N>` | Process at most N files (0 = no limit) | `0` |
 | `--dry-run <0|1>` | If 1, only list files that would be processed | `0` |
@@ -196,7 +196,7 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
 ## Directory Layout (defaults)
 
 ```
-/group/nu/ninja/work/otani/FROST_beamdata/test/
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/
   ├── rootfile/                      # input ROOT (e.g., run00097_0_9999.root)
   ├── rootfile_aftercalib/           # output ROOT (e.g., run00097_0_9999_lightyield.root)
   ├── chmap/
@@ -242,7 +242,7 @@ Customize paths and files:
 
 ```bash
 ./convertlightyield \
-  --base /group/nu/ninja/work/otani/FROST_beamdata/test \
+  --base /group/nu/ninja/work/otani/FROST_beamdata/e71c \
   --chmap chmap_20251009.txt \
   --refgain refgain.csv \
   --lycorr lightyield_correctionfactor.csv \
@@ -254,7 +254,7 @@ Customize paths and files:
 
 | Option | Description | Default |
 |---|---|---|
-| `--base <DIR>` | Base directory containing `rootfile/`, `rootfile_aftercalib/`, `calibration/`, `chmap/` | `/group/nu/ninja/work/otani/FROST_beamdata/test` |
+| `--base <DIR>` | Base directory containing `rootfile/`, `rootfile_aftercalib/`, `calibration/`, `chmap/` | `/group/nu/ninja/work/otani/FROST_beamdata/e71c` |
 | `--chmap <FILE>` | Chmap file under `chmap/` | `chmap_20251009.txt` |
 | `--refgain <FILE>` | Reference gain CSV under `calibration/ReferenceGain/` | `ReferenceGain_fiberdif.csv` |
 | `--lycorr <FILE>` | Light-yield correction CSV under `calibration/` | `lightyield_correctionfactor.csv` |

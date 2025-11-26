@@ -58,7 +58,7 @@ These are used to feed an HTML dashboard.
 ### BSD Files
 Directory:
 ```
-/group/nu/ninja/work/otani/FROST_beamdata/test/bsd/
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/bsd/
 ```
 Tree name: **bsd**  
 Used branches:
@@ -70,7 +70,7 @@ Used branches:
 ### Lightyield Files
 Directory:
 ```
-/group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/rootfile_aftercalib/
 ```
 Tree name: **tree**  
 Used branches:

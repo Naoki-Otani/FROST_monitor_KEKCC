@@ -34,6 +34,7 @@
 #include <TGraph.h>
 #include <TROOT.h>
 #include <TMath.h>
+#include <TPad.h>
 
 #include <vector>
 #include <string>
@@ -96,6 +97,7 @@ static const std::string PATH_OUT_LY   = FrostmonConfig::OUTPUT_DIR + "/dataqual
 static const std::string PATH_OUT_XY   = FrostmonConfig::OUTPUT_DIR + "/dataquality/xgyg/";
 static const std::string PATH_OUT_UNIXTIME = FrostmonConfig::OUTPUT_DIR + "/dataquality/unixtime/";
 static const std::string PATH_OUT_SPILLNUM = FrostmonConfig::OUTPUT_DIR + "/dataquality/spillnum/";
+static const std::string PATH_OUT_LY_EACHCH = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield_each_ch/";
 
 // ------------------------
 // Utilities
@@ -322,6 +324,195 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
 
   TString outpdf = TString::Format("%s%s_chavg_lightyield_hist.pdf", PATH_OUT_LY.c_str(), runTag.c_str());
   c.SaveAs(outpdf);
+}
+
+// ------------------------
+// Lightyield hist per channel (RAYRAW planes)
+// ------------------------
+
+static void BuildAndSaveLyEachChannel(const std::string& runTag,
+                                      const std::vector<FileInfoLite>& stableFiles)
+{
+  // Ensure histograms are not owned by any TFile
+  const Bool_t oldAddDir = TH1::AddDirectoryStatus();
+  TH1::AddDirectory(kFALSE);
+
+  // Configuration: RAYRAW planes and channels per plane
+  static const int NPLANES = FrostmonConfig::N_RAYRAW;   // RAYRAW = 1..11
+  static const int NCHPL   = FrostmonConfig::N_CH_PER_PLANE;   // channels per plane
+
+  if (stableFiles.empty()) {
+    TH1::AddDirectory(oldAddDir);
+    return;
+  }
+
+  gSystem->mkdir(PATH_OUT_LY_EACHCH.c_str(), true);
+
+  // (plane, local ch) -> cablenum mapping
+  int cable_map[NPLANES][NCHPL];
+  for (int p = 0; p < NPLANES; ++p) {
+    for (int lc = 0; lc < NCHPL; ++lc) {
+      cable_map[p][lc] = -1;
+    }
+  }
+
+  bool mapping_built = false;
+
+  // Histograms: [plane][local channel]
+  std::vector<std::vector<TH1D*>> hists(NPLANES, std::vector<TH1D*>(NCHPL, (TH1D*)nullptr));
+
+  const int nbins = FrostmonConfig::NBINS_LYCH;
+  const double xmin = FrostmonConfig::XMIN_LYCH;
+  const double xmax = FrostmonConfig::XMAX_LYCH;
+
+  // Loop over all ready ROOT files of the latest run
+  for (const auto& fi : stableFiles) {
+    TFile f(fi.path.c_str(), "READ");
+    if (f.IsZombie()) continue;
+    TTree* t = (TTree*)f.Get(TREE_NAME);
+    if (!t) { f.Close(); continue; }
+
+    t->SetBranchStatus("*", 0);
+
+    // Branch arrays
+    Int_t   cablenum[NOUT];
+    Int_t   rayraw[NOUT];
+    Int_t   rayrawch[NOUT];
+    Double_t ly[NOUT][NBUNCH];
+
+    // Require all needed branches
+    if (!t->GetBranch("cablenum") ||
+        !t->GetBranch("rayraw")   ||
+        !t->GetBranch("rayrawch") ||
+        !t->GetBranch("lightyield")) {
+      f.Close();
+      continue;
+    }
+
+    t->SetBranchStatus("cablenum",   1);
+    t->SetBranchStatus("rayraw",     1);
+    t->SetBranchStatus("rayrawch",   1);
+    t->SetBranchStatus("lightyield", 1);
+    t->SetBranchAddress("cablenum",   cablenum);
+    t->SetBranchAddress("rayraw",     rayraw);
+    t->SetBranchAddress("rayrawch",   rayrawch);
+    t->SetBranchAddress("lightyield", ly);
+
+    const Long64_t nent = t->GetEntries();
+    if (nent <= 0) { f.Close(); continue; }
+
+    // Build mapping from (plane, local ch) to cablenum only once
+    if (!mapping_built) {
+      t->GetEntry(0);
+      for (int i = 0; i < NOUT; ++i) {
+        const int rr = rayraw[i];   // expected 1..NPLANES
+        const int lc = rayrawch[i]; // expected 0..NCHPL-1
+        if (rr < 1 || rr > NPLANES) continue;
+        if (lc < 0 || lc >= NCHPL)  continue;
+        cable_map[rr-1][lc] = cablenum[i];
+      }
+
+      // Create histograms for all (plane, ch) in the global directory
+      gROOT->cd();  // <-- add this line
+
+      // Create histograms for all (plane, ch)
+      for (int p = 0; p < NPLANES; ++p) {
+        for (int lc = 0; lc < NCHPL; ++lc) {
+          TString hname  = Form("h_rayraw%02d_ch%02d", p+1, lc);
+          const int cable = cable_map[p][lc];
+
+          TString htitle;
+          if (cable > 0) {
+            htitle = Form("RAYRAW#%d ch%02d (cable %03d);Lightyield [p.e.];Number of events",
+                          p+1, lc, cable);
+          } else {
+            htitle = Form("RAYRAW#%d ch%02d;Lightyield [p.e.];Number of events",
+                          p+1, lc);
+          }
+
+          TH1D* h = new TH1D(hname, htitle, nbins, xmin, xmax);
+          h->SetLineWidth(1);
+          h->SetStats(1);
+          hists[p][lc] = h;
+        }
+      }
+
+      mapping_built = true;
+    }
+
+    // Fill histograms for all events in this file
+    for (Long64_t ie = 0; ie < nent; ++ie) {
+      t->GetEntry(ie);
+
+      for (int i = 0; i < NOUT; ++i) {
+        const int rr = rayraw[i];   // 1..NPLANES
+        const int lc = rayrawch[i]; // 0..NCHPL-1
+        if (rr < 1 || rr > NPLANES) continue;
+        if (lc < 0 || lc >= NCHPL)  continue;
+
+        TH1D* h = hists[rr-1][lc];
+        if (!h) continue;
+
+        // Fill from all bunches for this channel
+        for (int b = 0; b < NBUNCH; ++b) {
+          const double v = ly[i][b];
+          if (!std::isfinite(v)) continue;
+          h->Fill(v);
+        }
+      }
+    }
+
+    f.Close();
+  }
+
+  // If mapping was never built (no suitable file/branch), nothing to do
+  if (!mapping_built) return;
+
+  // Drawing and saving: one PDF per RAYRAW plane, 8x4 pads, log-y
+  gStyle->SetOptStat(1110);
+  gStyle->SetStatW(0.22);
+  gStyle->SetStatH(0.16);
+
+  for (int p = 0; p < NPLANES; ++p) {
+    TCanvas* c = new TCanvas(Form("c_rayraw%02d", p+1),
+                             Form("RAYRAW#%d lightyield", p+1),
+                             2000, 1400);
+    c->Divide(8, 4);
+
+    for (int lc = 0; lc < NCHPL; ++lc) {
+      c->cd(lc + 1);
+      gPad->SetLogy(1);
+      gPad->SetLeftMargin(0.15);
+
+      TH1D* h = hists[p][lc];
+      if (!h || h->GetEntries() <= 0) continue;
+
+      h->GetXaxis()->SetLabelSize(0.05);
+      h->GetYaxis()->SetLabelSize(0.05);
+      h->GetXaxis()->SetTitleSize(0.05);
+      h->GetYaxis()->SetTitleSize(0.05);
+      h->GetXaxis()->SetTitleOffset(0.9);
+      h->GetYaxis()->SetTitleOffset(1.4);
+
+      // Set a small positive minimum for log scale if needed
+      if (h->GetMinimum() <= 0.0) h->SetMinimum(0.5);
+
+      h->Draw();
+      gPad->Modified();
+      gPad->Update();
+    }
+
+    c->Modified();
+    c->Update();
+    gSystem->ProcessEvents();
+
+    TString out = TString::Format("%s%s_RAYRAW#%02d.pdf",
+                                  PATH_OUT_LY_EACHCH.c_str(),
+                                  runTag.c_str(), p+1);
+    c->SaveAs(out.Data());
+  }
+  // Restore previous AddDirectory setting
+  TH1::AddDirectory(oldAddDir);
 }
 
 // ------------------------
@@ -814,6 +1005,9 @@ static void OneIteration(int refresh_ms) {
   std::vector<int>    cnt(NOUT, 0);
   for (const auto& fi : stableFiles) AccumulateLyAvgPerChannel(sum, cnt, fi.path);
   BuildAndSaveLyAvgHist(sum, cnt, runTag);
+
+  // per-channel lightyield histograms (RAYRAW-wise)
+  BuildAndSaveLyEachChannel(runTag, stableFiles);
 
   // xg–yg
   BuildAndSaveXY2D(runTag, stableFiles);

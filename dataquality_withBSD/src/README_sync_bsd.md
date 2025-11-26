@@ -10,10 +10,10 @@ The script uses `rsync` to perform incremental synchronization every 3 minutes.
 ## 1. Overview
 
 - **Source directory (SRC_DIR)**  
-  `/group/t2k/beam/exp/data/beam_summary/current/t2krun14`
+  `/group/t2k/beam/exp/data/beam_summary/current/t2krun15`
 
 - **Destination directory (DST_DIR)**  
-  `/group/nu/ninja/work/otani/FROST_beamdata/test/bsd`
+  `/group/nu/ninja/work/otani/FROST_beamdata/e71c/bsd`
 
 - **Behavior**
   - Every 3 minutes, the script:
@@ -52,8 +52,8 @@ The main script is:
 Key configuration variables inside the script:
 
 ```bash
-SRC_DIR="/group/t2k/beam/exp/data/beam_summary/current/t2krun14"
-DST_DIR="/group/nu/ninja/work/otani/FROST_beamdata/test/bsd"
+SRC_DIR="/group/t2k/beam/exp/data/beam_summary/current/t2krun15"
+DST_DIR="/group/nu/ninja/work/otani/FROST_beamdata/e71c/bsd"
 INTERVAL_SECONDS=$((3 * 60))  # Check every 3 minutes
 ```
 

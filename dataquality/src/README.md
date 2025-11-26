@@ -16,10 +16,10 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    - `trailing_fromadc` (ADC)
 
    Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/runXXXXX_leading_hist.pdf`
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/runXXXXX_trailing_hist.pdf`
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/runXXXXX_leading_fromadc_hist.pdf`
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/tdc/runXXXXX_trailing_fromadc_hist.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/tdc/runXXXXX_leading_hist.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/tdc/runXXXXX_trailing_hist.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/tdc/runXXXXX_leading_fromadc_hist.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/tdc/runXXXXX_trailing_fromadc_hist.pdf`
 
 2. **Average lightyield per channel (latest run)**  
    - For each channel (272 total) and all 8 bunches, average only values **≥ 10 p.e.**.  
@@ -27,27 +27,35 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    - Histogram entries = 272.
 
    Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/runXXXXX_chavg_lightyield_hist.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/runXXXXX_chavg_lightyield_hist.pdf`
 
-3. **xg–yg 2D barycenter (latest run)**  
+3. **Per-channel lightyield histograms per RAYRAW plane (latest run)**  
+   - For each RAYRAW plane (`1..11`) and local channel (`0..31`), build a lightyield histogram using all bunches of the latest run.  
+   - One PDF per RAYRAW plane: an 8×4 pad canvas (32 channels) with **log-scale y axis**.
+
+   Output (PDF):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield_each_ch/runXXXXX_RAYRAW#YY.pdf`  
+     (YY = `01`..`11`)
+
+4. **xg–yg 2D barycenter (latest run)**  
    - Follows the previous implementation: cable mapping to x/y and weight `lightyield^XG_WEIGHT` (default 4.0).  
    - For each event, compute barycenter **per bunch** (8 times).  
    - Selection: `lightmax_x > 10` **and** `lightmax_y > 10`.
 
    Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/xgyg/runXXXXX_xgyg.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/xgyg/runXXXXX_xgyg.pdf`
 
-4. **evnum vs unixtime graph (latest run)**
-
-   Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/unixtime/runXXXXX_evnum_vs_unixtime.pdf`
-
-5. **evnum vs spillnum graph (latest run)**
+5. **evnum vs unixtime graph (latest run)**
 
    Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/spillnum/runXXXXX_evnum_vs_spillnum.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/unixtime/runXXXXX_evnum_vs_unixtime.pdf`
 
-6. **Average lightyield history 2D (all runs, 6-hour bins)**  
+6. **evnum vs spillnum graph (latest run)**
+
+   Output (PDF):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/spillnum/runXXXXX_evnum_vs_spillnum.pdf`
+
+7. **Average lightyield history 2D (all runs, 6-hour bins)**  
    - Accumulates per (time-bin, channel) the average of values **≥ 10 p.e.** across **all files** in the directory.  
    - Uses two on-disk caches for incremental updates:
      - `processed_files.tsv` — remember processed files and their modification times.
@@ -58,7 +66,7 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
      - If **no channel** has data (all zero), **skip** that time-bin entirely.
 
    Output (PDF):
-   - `/group/nu/ninja/work/otani/FROST_beamdata/test/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h.pdf`
 
 ---
 
@@ -98,7 +106,7 @@ g++ -O2 -std=c++17 dataqualityplot.cpp -o dataqualityplot $(root-config --cflags
 ## Data conventions
 
 - Input ROOT files live in:  
-  `/group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/`
+  `/group/nu/ninja/work/otani/FROST_beamdata/e71c/rootfile_aftercalib/`
   and are named like:  
   `run00103_0_9999_lightyield.root`, `run00103_10000_19999_lightyield.root`, …
 

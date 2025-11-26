@@ -11,8 +11,8 @@ Both files are continuously updated (default: every 5 minutes).
 ## Directory Structure
 
 ```
-/group/nu/ninja/work/otani/FROST_beamdata/test/datfile         # Source .dat files
-/group/nu/ninja/work/otani/FROST_beamdata/test/latestdat_info  # Output JS files
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/datfile         # Source .dat files
+/group/nu/ninja/work/otani/FROST_beamdata/e71c/latestdat_info  # Output JS files
 ```
 
 ---
