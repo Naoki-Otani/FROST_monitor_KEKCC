@@ -64,6 +64,8 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
      - If **any channel** has data (count > 0), **fill all channels** in the bin.  
        Channels with no data get `average = 0` (to monitor potential dead channels).  
      - If **no channel** has data (all zero), **skip** that time-bin entirely.
+     - The X-axis time range of this plot is currently restricted to **events with unix time ≥ 2025-11-29 18:00 (local time)**.
+     This cut is applied only to the **display range**; all bins are still accumulated internally.
 
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h.pdf`
@@ -148,12 +150,17 @@ If the server is pinned to UTC, you can force UTC+9:
 axis->SetTimeOffset(9*3600, "gmt");
 ```
 
+For the 6-hour binned lightyield history plot, the X-axis is additionally limited to times
+later than `2025-11-29 18:00` (local time) when drawing; this threshold is hard-coded
+via a call to `unixTimeLocal(2025, 11, 29, 18, 0, 0)` in the source code.
+
 ---
 
 ## Notes & tips
 
 - The program skips files that are likely still being written. A `*_lightyield.root` file is used only if it is at least **10 KB**, its size is stable in a short internal check (~500 ms), and its last modification time is at least **60 seconds** in the past.  
 - If you change directory paths, edit the `PATH_*` constants in the source code.
+- The visible time range of the 6-hour binned lightyield history plot can be changed by modifying the threshold passed to `unixTimeLocal(...)` inside `BuildAndSaveLyAvgHistory2D_Binned()`.
 - If labels overlap, consider increasing bottom margin or tweaking `SetNdivisions` and `SetLabelSize` on time axes.
 
 ---

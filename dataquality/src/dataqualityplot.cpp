@@ -103,6 +103,21 @@ static const std::string PATH_OUT_LY_EACHCH = FrostmonConfig::OUTPUT_DIR + "/dat
 // Utilities
 // ------------------------
 
+// Convert a local date-time to Unix time (seconds since 1970-01-01).
+static double unixTimeLocal(int year, int month, int day,
+                            int hour, int min, int sec)
+{
+  std::tm tm{};
+  tm.tm_year = year  - 1900;  // years since 1900
+  tm.tm_mon  = month - 1;     // 0–11
+  tm.tm_mday = day;
+  tm.tm_hour = hour;
+  tm.tm_min  = min;
+  tm.tm_sec  = sec;
+  tm.tm_isdst = -1;           // let libc determine DST
+  return static_cast<double>(std::mktime(&tm));
+}
+
 struct FileInfoLite {
   std::string path;
   Long_t size = 0;
@@ -927,6 +942,17 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   c.SetGrid();
   h->SetContour(99);
   h->GetXaxis()->SetNdivisions(520, kTRUE);
+
+  // Limit visible X range to >= 2025-11-29 18:00 (local time).
+  {
+    const double t_cut  = unixTimeLocal(2025, 11, 29, 18, 0, 0);
+    const double x_min_plot = std::max(tmin, t_cut);
+    const double x_max_plot = tmax;
+    if (x_min_plot < x_max_plot) {
+      h->GetXaxis()->SetRangeUser(x_min_plot, x_max_plot);
+    }
+  }
+
   h->Draw("COLZ");
   h->GetYaxis()->SetTitleOffset(1.1);
 
