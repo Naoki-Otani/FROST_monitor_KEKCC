@@ -61,7 +61,9 @@ static const Int_t BL_WIN       = FrostmonConfig::BL_WIN;
 static const Int_t BL_START_MAX = FrostmonConfig::BL_START_MAX;
 static const Int_t BL_STEP      = FrostmonConfig::BL_STEP;
 
-static const Int_t SAMPLING_FIRST_BANCH = FrostmonConfig::SAMPLING_FIRST_BANCH;   // integration start index for bunch#0
+// Default sampling index for bunch#0 (per-run value will be selected at runtime)
+static const Int_t SAMPLING_FIRST_BUNCH_DEFAULT = FrostmonConfig::SAMPLING_FIRST_BUNCH;
+
 static const Int_t ADC_THRESHOLD = FrostmonConfig::ADC_THRESHOLD; //threshold for leading/trailing_fromadc
 static const Double_t BUNCH_INTERVAL = FrostmonConfig::BUNCH_INTERVAL;
 
@@ -86,6 +88,118 @@ static std::time_t filetime_to_time_t(std::filesystem::file_time_type ftime) {
   auto sctp = time_point_cast<system_clock::duration>(
       ftime - std::filesystem::file_time_type::clock::now() + system_clock::now());
   return system_clock::to_time_t(sctp);
+}
+
+struct RunFileRule {
+  int run_max;           // This rule applies to runs with run <= run_max
+  std::string filename;  // File name for this rule
+};
+
+struct RunIntRule {
+  int run_max;  // This rule applies to runs with run <= run_max
+  int value;    // Integer value for this rule
+};
+
+// Load run→file rules from a text file.
+// Expected format per line (whitespace separated):
+//   <run_max> <filename>
+// Lines starting with '#' are treated as comments.
+static std::vector<RunFileRule> loadRunFileRules(const std::filesystem::path& rulePath) {
+  std::vector<RunFileRule> rules;
+  std::ifstream fin(rulePath);
+  if (!fin) return rules;  // If file cannot be opened, return empty
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+
+    std::istringstream iss(line);
+    int runmax;
+    std::string fname;
+    if (!(iss >> runmax >> fname)) continue;
+
+    rules.push_back(RunFileRule{runmax, fname});
+  }
+
+  // Ensure rules are sorted by run_max in ascending order
+  std::sort(rules.begin(), rules.end(),
+            [](const RunFileRule& a, const RunFileRule& b) {
+              return a.run_max < b.run_max;
+            });
+
+  return rules;
+}
+
+// Load run→int rules from a text file.
+// Expected format per line (whitespace separated):
+//   <run_max> <value>
+// Lines starting with '#' are treated as comments.
+static std::vector<RunIntRule> loadRunIntRules(const std::filesystem::path& rulePath) {
+  std::vector<RunIntRule> rules;
+  std::ifstream fin(rulePath);
+  if (!fin) return rules;
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+
+    std::istringstream iss(line);
+    int runmax, val;
+    if (!(iss >> runmax >> val)) continue;
+
+    rules.push_back(RunIntRule{runmax, val});
+  }
+
+  std::sort(rules.begin(), rules.end(),
+            [](const RunIntRule& a, const RunIntRule& b) {
+              return a.run_max < b.run_max;
+            });
+
+  return rules;
+}
+
+// Choose a file name for a given run using the rule list.
+// If no rule matches (or run is invalid), the defaultFile is returned.
+static std::string chooseFileForRun(const std::vector<RunFileRule>& rules,
+                                    int run,
+                                    const std::string& defaultFile)
+{
+  if (run < 0 || rules.empty()) return defaultFile;
+  for (const auto& r : rules) {
+    if (run <= r.run_max) return r.filename;
+  }
+  return defaultFile;
+}
+
+// Choose an integer value for a given run using the rule list.
+// If no rule matches (or run is invalid), the defaultValue is returned.
+static int chooseIntForRun(const std::vector<RunIntRule>& rules,
+                           int run,
+                           int defaultValue)
+{
+  if (run < 0 || rules.empty()) return defaultValue;
+  for (const auto& r : rules) {
+    if (run <= r.run_max) return r.value;
+  }
+  return defaultValue;
+}
+
+// Parse run number from a run string such as:
+//   "run00097_0_9999" -> 97
+//   "run00097"        -> 97
+// Returns -1 if parsing fails.
+static int parseRunNumberFromRunString(const std::string& s) {
+  std::regex reFull(R"(run(\d{5})_(\d+)_\d+)");
+  std::regex reSimple(R"(run(\d{5}))");
+  std::smatch m;
+  if (std::regex_match(s, m, reFull)) {
+    return std::stoi(m[1].str());
+  } else if (std::regex_match(s, m, reSimple)) {
+    return std::stoi(m[1].str());
+  }
+  return -1;
 }
 
 // cablenum order: 1..140, 201..332 (total 272)
@@ -328,7 +442,8 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                                       const char* referencegain_csv,
                                       const char* rayrawcalib_csv,
                                       const char* lycorr_csv,
-                                      const char* spillchmap_file)
+                                      const char* spillchmap_file,
+                                      int sampling_first_bunch)
 {
   const auto CAB_ORDER = make_cab_order();
   const auto maps      = load_chmap(chmap_file);
@@ -446,10 +561,10 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
         double adcint[NBUNCH] = {0.0};
         const auto& wf = waveform->at(ch);
-        if ((int)wf.size() > SAMPLING_FIRST_BANCH) {
-          const double bl    = estimate_baseline(wf);
-          for(int bunch=0; bunch<NBUNCH; ++bunch) {
-            const int int_min = SAMPLING_FIRST_BANCH + (int)(bunch * BUNCH_INTERVAL);
+        if ((int)wf.size() > sampling_first_bunch) {
+          const double bl = estimate_baseline(wf);
+          for (int bunch = 0; bunch < NBUNCH; ++bunch) {
+            const int int_min = sampling_first_bunch + (int)(bunch * BUNCH_INTERVAL);
             adcint[bunch] = integrate_adc_minus_baseline(wf, bl, int_min);
           }
         }
@@ -569,13 +684,73 @@ static int scanAndConvert(const std::string& base,
                           const std::string& spillchmapFile,
                           const std::string& lycorrCsv)
 {
-  const fs::path rootDir   = fs::path(base) / "rootfile";
-  const fs::path outDir    = fs::path(base) / "rootfile_aftercalib";
-  const fs::path calibDir  = fs::path(base) / "calibration" / "calibresult";
-  const fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
+  const fs::path rootDir  = fs::path(base) / "rootfile";
+  const fs::path outDir   = fs::path(base) / "rootfile_aftercalib";
+  const fs::path calibDir = fs::path(base) / "calibration" / "calibresult";
+
   const fs::path refgainPath = fs::path(base) / "calibration" / "ReferenceGain" / refgainCsv;
-  const fs::path lycorrPath  = fs::path(base) / "calibration" / "lightyield_correctionfactor" /lycorrCsv;
-  const fs::path spillmapPath = fs::path(base) / "chmap" / spillchmapFile;
+  const fs::path lycorrPath  = fs::path(base) / "calibration"
+                                            / "lightyield_correctionfactor" / lycorrCsv;
+
+  // Determine whether chmap and spillchmap were overridden by CLI.
+  // If they are equal to the config defaults, we assume no CLI override.
+  const bool chmapCliOverride =
+      (chmapFile != FrostmonConfig::CHMAP_FILE);
+  const bool spillCliOverride =
+      (spillchmapFile != FrostmonConfig::SPILL_CHMAP_FILE);
+
+  // Default file names used when no rule matches.
+  const std::string defaultChmap       = chmapFile;
+  const std::string defaultSpillChmap  = spillchmapFile;
+  const int         defaultSamplingIdx = SAMPLING_FIRST_BUNCH_DEFAULT;
+
+  // Load chmap rules (run→chmap), only if chmap is not overridden by CLI.
+  std::vector<RunFileRule> chmapRules;
+  if (!chmapCliOverride) {
+    fs::path rulePath = fs::path(base) / "chmap" / FrostmonConfig::CHMAP_RULE_FILE;
+    chmapRules = loadRunFileRules(rulePath);
+    if (!chmapRules.empty()) {
+      std::cout << "[CFG] Loaded " << chmapRules.size()
+                << " chmap rule(s) from " << rulePath << "\n";
+    } else {
+      std::cout << "[CFG] No chmap rule file (" << rulePath
+                << "). Using default chmap=" << defaultChmap << "\n";
+    }
+  } else {
+    std::cout << "[CFG] --chmap specified. Chmap rules are disabled. chmap="
+              << defaultChmap << "\n";
+  }
+
+  // Load spill chmap rules (run→spill chmap), only if spillchmap is not overridden by CLI.
+  std::vector<RunFileRule> spillChmapRules;
+  if (!spillCliOverride) {
+    fs::path rulePath = fs::path(base) / "chmap" / FrostmonConfig::SPILL_CHMAP_RULE_FILE;
+    spillChmapRules = loadRunFileRules(rulePath);
+    if (!spillChmapRules.empty()) {
+      std::cout << "[CFG] Loaded " << spillChmapRules.size()
+                << " spill chmap rule(s) from " << rulePath << "\n";
+    } else {
+      std::cout << "[CFG] No spill chmap rule file (" << rulePath
+                << "). Using default spill chmap=" << defaultSpillChmap << "\n";
+    }
+  } else {
+    std::cout << "[CFG] --spillchmap specified. Spill chmap rules are disabled. spillchmap="
+              << defaultSpillChmap << "\n";
+  }
+
+  // Load sampling-first-bunch rules (run→sampling index).
+  std::vector<RunIntRule> samplingRules;
+  {
+    fs::path rulePath = fs::path(base) / "calibration" / "sampling_first_bunch" / FrostmonConfig::SAMPLING_FIRST_BUNCH_RULE_FILE;
+    samplingRules = loadRunIntRules(rulePath);
+    if (!samplingRules.empty()) {
+      std::cout << "[CFG] Loaded " << samplingRules.size()
+                << " sampling-first-bunch rule(s) from " << rulePath << "\n";
+    } else {
+      std::cout << "[CFG] No sampling-first-bunch rule file (" << rulePath
+                << "). Using default sampling index=" << defaultSamplingIdx << "\n";
+    }
+  }
 
   // CSV must be >= 1KB and "stable" (no update) for at least 60 seconds
   constexpr std::uintmax_t MIN_CSV_SIZE_BYTES = 1024ull;
@@ -618,18 +793,41 @@ static int scanAndConvert(const std::string& base,
       continue;
     }
     if (fileExists(outRoot)) {
-      // Already converted
+      // Already converted for this run
       continue;
     }
 
-    std::cout << "[RUN] " << run << std::endl;
+    // Parse integer run number, used to select chmap and sampling index.
+    const int runNumber = parseRunNumberFromRunString(run);
+
+    // Select chmap and spill chmap file names for this run.
+    const std::string chmapFileThisRun =
+        chooseFileForRun(chmapRules, runNumber, defaultChmap);
+    const std::string spillChmapFileThisRun =
+        chooseFileForRun(spillChmapRules, runNumber, defaultSpillChmap);
+
+    // Select sampling-first-bunch index for this run.
+    const int samplingFirstBunchThisRun =
+        chooseIntForRun(samplingRules, runNumber, defaultSamplingIdx);
+
+    const fs::path chmapPath     = fs::path(base) / "chmap" / chmapFileThisRun;
+    const fs::path spillmapPath  = fs::path(base) / "chmap" / spillChmapFileThisRun;
+
+    std::cout << "[RUN] " << run
+              << " (run=" << runNumber
+              << ", chmap=" << chmapFileThisRun
+              << ", spillchmap=" << spillChmapFileThisRun
+              << ", sampling_first_bunch=" << samplingFirstBunchThisRun
+              << ")\n";
+
     convertlightyield_rayraw_(inRoot.string().c_str(),
                               outRoot.string().c_str(),
                               chmapPath.string().c_str(),
                               refgainPath.string().c_str(),
                               calibCsv.string().c_str(),
                               lycorrPath.string().c_str(),
-                              spillmapPath.string().c_str());
+                              spillmapPath.string().c_str(),
+                              samplingFirstBunchThisRun);
     ++converted;
     if (g_stop) break;
   }

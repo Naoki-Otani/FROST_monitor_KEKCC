@@ -490,6 +490,58 @@ static std::string trim(std::string s) {
   return s;
 }
 
+struct RunFileRule {
+  int run_max;           // This rule applies to runs with run <= run_max
+  std::string filename;  // File name for this rule
+};
+
+// Load run→file rules from a text file.
+// Expected format per line (whitespace separated):
+//   <run_max> <filename>
+// Example:
+//   5      chmap_20251009.txt
+//   20     chmap_20251122.txt
+static std::vector<RunFileRule> loadRunFileRules(const std::filesystem::path& rulePath) {
+  std::vector<RunFileRule> rules;
+  std::ifstream fin(rulePath);
+  if (!fin) return rules;  // If file cannot be opened, return empty
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    line = trim(line);
+    if (line.empty() || line[0] == '#') continue;
+
+    std::istringstream iss(line);
+    int runmax;
+    std::string fname;
+    if (!(iss >> runmax >> fname)) continue;
+
+    rules.push_back(RunFileRule{runmax, fname});
+  }
+
+  // Ensure rules are sorted by run_max in ascending order
+  std::sort(rules.begin(), rules.end(),
+            [](const RunFileRule& a, const RunFileRule& b) {
+              return a.run_max < b.run_max;
+            });
+
+  return rules;
+}
+
+// Choose a file name for a given run using the rule list.
+// If no rule matches (or run is invalid), the defaultFile is returned.
+static std::string chooseFileForRun(const std::vector<RunFileRule>& rules,
+                                    int run,
+                                    const std::string& defaultFile)
+{
+  if (run < 0 || rules.empty()) return defaultFile;
+  for (const auto& r : rules) {
+    if (run <= r.run_max) return r.filename;
+  }
+  return defaultFile;
+}
+
+
 static void printUsage(const char* prog) {
   std::cout <<
     "Usage: " << prog << " [options]\n"
@@ -506,22 +558,45 @@ static void printUsage(const char* prog) {
 
 // One-shot scan and process. Returns number of processed files.
 static int scanAndProcess(const std::string& base,
-                          const std::string& chmapFile,
+                          const std::string& chmapFileCli,
                           int limit,
                           bool dryRun)
 {
   namespace fs = std::filesystem;
 
-  fs::path rootDir   = fs::path(base) / "rootfile";
-  fs::path csvDir    = fs::path(base) / "calibration" / "calibresult";
-  fs::path plotDir   = fs::path(base) / "calibration" / "plot";
-  fs::path chmapPath = fs::path(base) / "chmap" / chmapFile;
+  fs::path rootDir = fs::path(base) / "rootfile";
+  fs::path csvDir  = fs::path(base) / "calibration" / "calibresult";
+  fs::path plotDir = fs::path(base) / "calibration" / "plot";
 
-  // threshold: only files >= 10 KB and "stable" for >= 60 s
+  // Determine the default chmap:
+  //  - If the CLI option --chmap is given, always use that file.
+  //  - Otherwise, use the config default FrostmonConfig::CHMAP_FILE.
+  std::string defaultChmap = chmapFileCli.empty()
+                           ? FrostmonConfig::CHMAP_FILE
+                           : chmapFileCli;
+
+  // Load chmap rules only when the chmap was not fixed by CLI.
+  std::vector<RunFileRule> chmapRules;
+  if (chmapFileCli.empty()) {
+    fs::path rulePath = fs::path(base) / "chmap" / FrostmonConfig::CHMAP_RULE_FILE;
+    chmapRules = loadRunFileRules(rulePath);
+    if (!chmapRules.empty()) {
+      std::cout << "[CFG] Loaded " << chmapRules.size()
+                << " chmap rule(s) from " << rulePath << "\n";
+    } else {
+      std::cout << "[CFG] No chmap rule file (" << rulePath
+                << "). Using default chmap=" << defaultChmap << "\n";
+    }
+  } else {
+    std::cout << "[CFG] --chmap specified. Chmap rules are disabled. chmap="
+              << defaultChmap << "\n";
+  }
+
+  // Threshold: only files >= 10 KB and "stable" for >= 60 s are considered
   constexpr std::uintmax_t MIN_SIZE_BYTES = 10ull * 1024ull;
   constexpr std::time_t    STABLE_SEC     = 60;
 
-  // Ensure output dirs exist
+  // Ensure output directories exist
   std::error_code ec;
   fs::create_directories(csvDir, ec);
   fs::create_directories(plotDir, ec);
@@ -542,17 +617,16 @@ static int scanAndProcess(const std::string& base,
     return 0;
   }
 
-  // Sort by run/segment/mtime
+  // Sort by run / segment / mtime
   std::sort(files.begin(), files.end(), infoLess);
 
-  // current time for "stability" judgement
+  // Current time for "stability" judgement
   std::time_t now_t = std::time(nullptr);
 
-  // Filter “unprocessed” (CSV missing)
+  // Filter "unprocessed" (CSV missing) and "stable" files
   std::vector<FileInfo> todo;
   for (const auto& fi : files) {
-    // --- size & stability check ---
-    // Require: size >= 100 MB AND last write (mtime) older than 60 s
+    // Size & stability check
     bool stable = false;
     if (fi.size >= MIN_SIZE_BYTES && fi.mtime != 0) {
       if (std::difftime(now_t, fi.mtime) >= STABLE_SEC) {
@@ -560,7 +634,7 @@ static int scanAndProcess(const std::string& base,
       }
     }
     if (!stable) {
-      // still being written (or too small) → skip this round
+      // Probably still being written (or too small) → skip in this round
       continue;
     }
 
@@ -575,12 +649,12 @@ static int scanAndProcess(const std::string& base,
   }
 
   std::cout << "[INFO] To process (" << todo.size() << ") "
-            << "(only files >= 100MB and stable for >= 60s are considered):\n";
+            << "(only files >= 10KB and stable for >= 60s are considered):\n";
   for (const auto& fi : todo) {
     std::cout << "  - " << fi.path.filename().string()
               << "  [run="      << (fi.parsed ? std::to_string(fi.run)      : "NA")
               << ", segStart="  << (fi.parsed ? std::to_string(fi.segStart) : "NA")
-              << ", size="      << (fi.size / (1024.0*1024.0)) << "MB"
+              << ", size="      << (fi.size / (1024.0 * 1024.0)) << "MB"
               << "]\n";
   }
 
@@ -595,12 +669,28 @@ static int scanAndProcess(const std::string& base,
     if (limit > 0 && processed >= limit) break;
 
     const std::string infile = fi.base;
-    const TString filename_inroot  = TString((fs::path(base) / "rootfile" / (infile + ".root")).string());
-    const TString filename_outcsv  = TString((fs::path(base) / "calibration" / "calibresult" / ("calib_" + infile + ".csv")).string());
-    const TString filename_outplot = TString((fs::path(base) / "calibration" / "plot" / ("calib_" + infile)).string());
-    const TString filename_chmap   = TString((fs::path(base) / "chmap" / chmapFile).string());
 
-    std::cout << "[RUN] " << infile << std::endl;
+    // Select chmap file for this run
+    std::string chmapFileThisRun = defaultChmap;
+    if (!chmapRules.empty() && fi.parsed) {
+      chmapFileThisRun = chooseFileForRun(chmapRules, fi.run, defaultChmap);
+    }
+
+    const TString filename_inroot  =
+        TString((fs::path(base) / "rootfile" / (infile + ".root")).string());
+    const TString filename_outcsv  =
+        TString((fs::path(base) / "calibration" / "calibresult"
+                 / ("calib_" + infile + ".csv")).string());
+    const TString filename_outplot =
+        TString((fs::path(base) / "calibration" / "plot"
+                 / ("calib_" + infile)).string());
+    const TString filename_chmap   =
+        TString((fs::path(base) / "chmap" / chmapFileThisRun).string());
+
+    std::cout << "[RUN] " << infile
+              << " (run=" << (fi.parsed ? std::to_string(fi.run) : std::string("NA"))
+              << ", chmap=" << chmapFileThisRun << ")\n";
+
     calibrayraw_(filename_inroot, filename_chmap, filename_outcsv, filename_outplot);
     ++processed;
   }
@@ -608,7 +698,6 @@ static int scanAndProcess(const std::string& base,
   std::cout << "[DONE] Processed " << processed << " file(s).\n";
   return processed;
 }
-
 
 // ---------------------------------------------
 // Batch driver (main)

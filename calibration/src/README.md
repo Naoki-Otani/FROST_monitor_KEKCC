@@ -22,7 +22,10 @@ Optionally, it can **continuously watch** the directory and process new files as
   │   ├── calibresult/           # output CSV (e.g., calib_run00097_0_9999.csv)
   │   └── plot/                  # output PDFs (e.g., calib_run00097_0_9999_RAYRAW#01_0pe.pdf)
   └── chmap/
-      └── chmap_20251009.txt     # channel map (default)
+      └── chmap_20251009.txt     # channel map (example)
+      └── chmap_rules.txt        # optional per-run chmap rules
+
+If `chmap_rules.txt` exists, it is used to select the chmap file per run (unless `--chmap` is given).
 ```
 
 ---
@@ -66,7 +69,7 @@ You can specify options manually:
 | Option | Description | Default |
 |:--------|:-------------|:---------|
 | `--base <DIR>` | Base directory (must contain `rootfile/`, `calibration/`, `chmap/`) | `/group/nu/ninja/work/otani/FROST_beamdata/e71c` |
-| `--chmap <FILENAME>` | Channel map file inside `chmap/` | `chmap_20251009.txt` |
+| `--chmap <FILENAME>` | Channel map file inside `chmap/`. If given, it is used for **all runs** and per-run `chmap_rules.txt` is ignored. | config default (e.g. `chmap_20251122.txt`) |
 | `--limit <N>` | Process at most N files (0 = no limit) | `0` |
 | `--dry-run <0|1>` | If 1, only list files that would be processed | `0` |
 | `--watch <SEC>` | **Watch mode:** re-scan every `<SEC>` seconds (until Ctrl+C) | 60 |
@@ -98,7 +101,7 @@ Example output:
 ```
 [WATCH] Start watching every 600 seconds. Press Ctrl-C to stop.
 [WATCH] Scan at 2025-11-09 18:30:00
-[INFO] To process (2) (only files >= 100MB and stable for >= 60s are considered):
+[INFO] To process (2) (only files >= 10KB and stable for >= 60s are considered):
   - run00098_0_9999.root [run=98, segStart=0]
   - run00098_10000_19999.root [run=98, segStart=10000]
   (size=123.4MB etc.)
@@ -137,6 +140,30 @@ The CSV columns:
    - Perform waveform integration and peak fitting (0pe and 1pe)
    - Save plots and calibration CSV
 6. (Optional) Repeat automatically at intervals if `--watch` is specified.
+
+### Per-run chmap selection
+
+By default, `calibration` can select the chmap file **per run** using the optional
+`chmap/chmap_rules.txt` file.
+
+The format is:
+
+```text
+# run_max  chmap_filename
+7     chmap_20251122.txt
+9999  chmap_20251130.txt
+```
+
+For each input file whose run number is `run`, the program:
+
+1. Parses the integer run number (e.g. `run00005_0_9999.root` → `5`).
+2. Finds the first row with `run <= run_max`.
+3. Uses that `chmap_filename` for calibration.
+
+If `chmap_rules.txt` is missing or no rule matches, the **default** chmap from `config.hpp`
+is used.
+
+If you pass `--chmap <FILENAME>`, that file is used for **all runs**, and `chmap_rules.txt` is ignored.
 
 ---
 
@@ -200,11 +227,16 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
   ├── rootfile/                      # input ROOT (e.g., run00097_0_9999.root)
   ├── rootfile_aftercalib/           # output ROOT (e.g., run00097_0_9999_lightyield.root)
   ├── chmap/
-  │   └── chmap_20251009.txt         # default chmap
-  │   └── chmap_spillnum20251111.txt # spillnum bit → (RAYRAW, ch) map
+  │   ├── chmap_20251122.txt         # default RAYRAW chmap (example)
+  │   ├── chmap_spillnum20251111.txt # spillnum bit → (RAYRAW, ch) map (default)
+  │   ├── chmap_rules.txt            # optional per-run RAYRAW chmap rules
+  │   └── chmap_spillnum_rules.txt       # optional per-run spillnum chmap rules
   └── calibration/
-  ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
-      ├── lightyield_correctionfactor.csv           # per-cable light-yield correction factors
+      ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
+      ├── lightyield_correctionfactor/
+      │   └── lightyield_correctionfactor.csv       # per-cable light-yield correction factors
+      ├── sampling_first_bunch/
+      │   └── sampling_first_bunch_rules.txt        # optional per-run sampling-start rules
       └── ReferenceGain/
           └── ReferenceGain_fiberdif.csv            # reference gain CSV (configurable)
 ```
@@ -255,10 +287,10 @@ Customize paths and files:
 | Option | Description | Default |
 |---|---|---|
 | `--base <DIR>` | Base directory containing `rootfile/`, `rootfile_aftercalib/`, `calibration/`, `chmap/` | `/group/nu/ninja/work/otani/FROST_beamdata/e71c` |
-| `--chmap <FILE>` | Chmap file under `chmap/` | `chmap_20251009.txt` |
+| `--chmap <FILE>` | RAYRAW chmap file under `chmap/`. If given, it is used for **all runs** and per-run `chmap_rules.txt` is ignored. | config default (e.g. `chmap_20251122.txt`) |
 | `--refgain <FILE>` | Reference gain CSV under `calibration/ReferenceGain/` | `ReferenceGain_fiberdif.csv` |
-| `--lycorr <FILE>` | Light-yield correction CSV under `calibration/` | `lightyield_correctionfactor.csv` |
-| `--spillchmap <FILE>` | Spill-number bit mapping file under `chmap/` | `chmap_spillnum20251111.txt` |
+| `--lycorr <FILE>` | Light-yield correction CSV under `calibration/lightyield_correctionfactor/` | `lightyield_correctionfactor.csv` |
+| `--spillchmap <FILE>` | Spill-number bit mapping file under `chmap/`. If given, it is used for **all runs** and per-run `chmap_spillnum_rules.txt` is ignored. | `chmap_spillnum20251111.txt` |
 | `--watch <SEC>` | Rescan interval in seconds (0 = disabled) | `60` |
 | `--oneshot <0|1>` | If `1`, scan once and exit | `0` |
 | `-h`, `--help` | Show help | — |
@@ -295,6 +327,68 @@ If a CSV is not ready, the program reports something like:
 ```
 [SKIP] CSV not ready (too small or recently updated): calib_run00097_0_9999.csv (size=512 bytes)
 ```
+
+## Per-run configuration (chmap, spillchmap, sampling start index)
+
+The conversion tool selects several configuration parameters **per run** based on
+simple rule files.
+
+### RAYRAW chmap rules (`chmap/chmap_rules.txt`)
+
+If present, this file selects the RAYRAW chmap per run.  
+Format:
+```text
+# run_max  chmap_filename
+7     chmap_20251122.txt
+9999  chmap_20251130.txt
+```
+
+For a run with integer run number `run` (e.g. `run00005_0_9999` → `5`),
+the program finds the first line with `run <= run_max` and uses that `chmap_filename`.
+
+If the file is missing or no rule matches, the default chmap from `config.hpp` is used.
+
+If `--chmap` is specified on the command line, that file is used for **all runs** and
+`chmap_rules.txt` is ignored.
+
+### Spillnum chmap rules (`chmap/chmap_spillnum_rules.txt`)
+
+Similarly, if `chmap_spillnum_rules.txt` exists, it selects the spill chmap file per run.  
+Format:
+
+```text
+# run_max  spill_chmap_filename
+5      chmap_spillnum20251111.txt
+20     chmap_spillnum20251201.txt
+999999 chmap_spillnum20260101.txt
+```
+
+If `--spillchmap` is specified, that file is used for all runs and the rules file is ignored.
+
+### Sampling start index rules (`calibration/sampling_first_bunch/sampling_first_bunch_rules.txt`)
+
+The integration for each bunch starts at a sample index called `sampling_first_bunch`.
+By default this is a single constant value from `config.hpp` (e.g. `10`),
+
+```cpp
+const Int_t SAMPLING_FIRST_BUNCH = 10;
+```
+
+If the rule file exists, it can override this value per run.
+
+Format:
+
+```text
+# run_max  sampling_first_bunch
+5      10
+20     12
+999999 15
+```
+
+For each run, the program parses the integer run number from `<RUNNAME>` (e.g. `run00006_0_9999` → `6`),
+selects the RAYRAW chmap, spill chmap, and `sampling_first_bunch` based on these rules (or defaults),
+and runs the conversion using those settings.
+
 
 ---
 
@@ -359,6 +453,9 @@ Bits are interpreted as:
 - bit15 → 2¹⁴
 
 All bits are combined into an integer and stored in `spillnum`.
+
+Which `(RAYRAW, ch)` channels are used for each spill bit is defined by the
+spill chmap selected for that run (either from `--spillchmap` or `chmap_spillnum_rules.txt`).
 ---
 
 ## Help

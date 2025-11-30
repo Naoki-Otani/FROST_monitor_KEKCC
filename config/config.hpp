@@ -5,10 +5,23 @@
 namespace FrostmonConfig {
 // ----- Path configurations -----
     const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c";
-    // const std::string CHMAP_FILE = "chmap_20251009.txt";
+
+    // Default chmap file name (used when rules are not available)
     const std::string CHMAP_FILE = "chmap_20251122.txt";
-    const std::string REFGAIN_CSV = "ReferenceGain_fiberdif.csv";
+    // Rule file to select chmap per run (relative to <base>/chmap/)
+    const std::string CHMAP_RULE_FILE = "chmap_rules.txt";
+    // Default spill chmap file name (used when rules are not available)
     const std::string SPILL_CHMAP_FILE = "chmap_spillnum20251111.txt";
+    // Rule file to select spill chmap per run (relative to <base>/chmap/)
+    const std::string SPILL_CHMAP_RULE_FILE = "chmap_spillnum_rules.txt";
+
+    // Default sampling index for bunch#0 (used when rules are not available)
+    static const Int_t SAMPLING_FIRST_BUNCH = 10;   // integration start index for bunch#0
+    // Rule file to select SAMPLING_FIRST_BUNCH per run (relative to <base>/calibration/)
+    // Each line in this file defines a (run_max, sampling_first_bunch) pair.
+    const std::string SAMPLING_FIRST_BUNCH_RULE_FILE = "sampling_first_bunch_rules.txt";
+
+    const std::string REFGAIN_CSV = "ReferenceGain_fiberdif.csv";
     const std::string LIGHTYIELD_CORR_CSV = "lightyield_correctionfactor.csv";
 
 
@@ -39,9 +52,8 @@ namespace FrostmonConfig {
 
 // ----- convertlightyield parameters -----
     static const Int_t INT_RANGE = 75;
-    static const Int_t SAMPLING_FIRST_BANCH = 10;   // integration start index for bunch#0
     static const Int_t ADC_THRESHOLD = 520; //threshold for leading/trailing_fromadc
-    static const Int_t BUNCH_INTERVAL = 43.5;    // sampling ticks
+    static const Double_t BUNCH_INTERVAL = 43.5;    // sampling ticks
 
     static const Int_t NOUT         = 272;
     static const Int_t NBUNCH       = 8;
