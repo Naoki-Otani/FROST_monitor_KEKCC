@@ -549,8 +549,8 @@ static void printUsage(const char* prog) {
     "  -h, --help           Show this help and exit\n"
     "  --base <DIR>         Base directory (contains rootfile/, calibration/, chmap/)\n"
     "                       Default: /group/nu/ninja/work/otani/FROST_beamdata/test\n"
-    "  --chmap <FILENAME>   Chmap filename under chmap/ (e.g., chmap_20251009.txt)\n"
-    "                       Default: chmap_20251009.txt\n"
+    "  --chmap <FILENAME>   Chmap filename under chmap/ (e.g., chmap_20251122.txt)\n"
+    "                       Default: chmap_20251122.txt\n"
     "  --limit <N>          Process at most N files (0 = no limit; default 0)\n"
     "  --dry-run <0|1>      List files to process without running (default 0)\n"
     "  --watch <SEC>        Watch mode: rescan every SEC seconds until Ctrl-C (default 60)\n";
@@ -704,7 +704,8 @@ static int scanAndProcess(const std::string& base,
 // ---------------------------------------------
 int main(int argc, char** argv) {
   std::string base = FrostmonConfig::OUTPUT_DIR;
-  std::string chmapFile = FrostmonConfig::CHMAP_FILE;
+  // Empty chmapFileCli means "--chmap" was not given; config default + rules are used.
+  std::string chmapFileCli;
   int limit = 0;
   bool dryRun = false;
   int watchSec = 60;  // 0 => one-shot
@@ -725,8 +726,8 @@ int main(int argc, char** argv) {
       std::exit(1);
     };
 
-    if (a == "--base")        base      = next(i);
-    else if (a == "--chmap")  chmapFile = next(i);
+    if (a == "--base")        base       = next(i);
+    else if (a == "--chmap")  chmapFileCli = next(i);
     else if (a == "--limit")  limit     = std::stoi(next(i));
     else if (a == "--dry-run"){ std::string v = next(i); dryRun = (v=="1"||v=="true"||v=="yes"); }
     else if (a == "--watch")  watchSec  = std::stoi(next(i));
@@ -737,15 +738,19 @@ int main(int argc, char** argv) {
     }
   }
 
+// This is the effective default chmap used when no per-run rule overrides it.
+  const std::string effectiveChmap =
+      chmapFileCli.empty() ? FrostmonConfig::CHMAP_FILE : chmapFileCli;
+
   std::cout << "[CFG] base=" << base
-            << " chmap=" << chmapFile
+            << " chmap=" << effectiveChmap
             << " limit=" << limit
             << " dryRun=" << (dryRun?1:0)
             << " watch=" << watchSec << "s\n";
 
   if (watchSec <= 0) {
     // one-shot
-    (void)scanAndProcess(base, chmapFile, limit, dryRun);
+    (void)scanAndProcess(base, chmapFileCli, limit, dryRun);
     return 0;
   }
 
@@ -757,7 +762,7 @@ int main(int argc, char** argv) {
     std::time_t now = std::time(nullptr);
     std::cout << "\n[WATCH] Scan at " << std::put_time(std::localtime(&now), "%F %T") << std::endl;
 
-    (void)scanAndProcess(base, chmapFile, /*limit=*/0, /*dryRun=*/dryRun);
+    (void)scanAndProcess(base, chmapFileCli, /*limit=*/0, /*dryRun=*/dryRun);
     // In watch mode, limit is ignored (always process all pending)
 
     // sleep in small chunks so Ctrl-C is responsive

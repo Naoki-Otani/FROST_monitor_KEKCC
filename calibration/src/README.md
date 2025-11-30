@@ -46,13 +46,21 @@ g++ -std=c++17 -O2 calibration.cpp -o calibration $(root-config --cflags --libs)
 
 ---
 
-## ▶Run (One-shot Mode)
+## ▶Run (Watch Mode, default)
 
-By default, the tool scans once and processes all unprocessed `.root` files.
+By default, the tool runs in **watch mode** and rescans every 60 seconds:
 
 ```bash
 ./calibration
 ```
+
+This is equivalent to:
+
+```bash
+./calibration --watch 60
+```
+
+If you want to run a single scan and exit, disable watching with `--watch 0`.
 
 You can specify options manually:
 
@@ -79,10 +87,12 @@ You can specify options manually:
 
 ## Watch Mode (Continuous Monitoring)
 
-If you want the program to keep running and automatically process newly created `.root` files, use the `--watch` option:
+The default watch interval is **60 seconds**.
+
+You can change it using the `--watch` option:
 
 ```bash
-./calibration --watch 600
+./calibration --watch 600    # re-scan every 600 seconds (10 minutes)
 ```
 
 This example re-scans every **600 seconds (10 minutes)**.
@@ -170,11 +180,14 @@ If you pass `--chmap <FILENAME>`, that file is used for **all runs**, and `chmap
 ## Typical Use
 
 ```bash
-# One-time processing
+# Continuous monitoring (default: every 60 seconds)
 ./calibration
 
 # Continuous monitoring (every 5 minutes)
 ./calibration --watch 300
+
+# One-time processing (no watch)
+./calibration --watch 0
 
 # Dry run (list only)
 ./calibration --dry-run 1
