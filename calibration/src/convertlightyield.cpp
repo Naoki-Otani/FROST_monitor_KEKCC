@@ -76,6 +76,11 @@ static const Int_t BASEREF_CALIB_CABLENUM = FrostmonConfig::BASEREF_CALIB_CABLEN
 static const Int_t SPILL_BIT_ADC_THRESHOLD = FrostmonConfig::SPILL_BIT_ADC_THRESHOLD;
 static const Int_t SPILL_BIT_MIN_POINTS    = FrostmonConfig::SPILL_BIT_MIN_POINTS;
 
+static const Double_t PILEUP_THRESHOLD = FrostmonConfig::PILEUP_THRESHOLD;
+static const Int_t UNDERSHOOT_ADC_THRESHOLD = FrostmonConfig::UNDERSHOOT_ADC_THRESHOLD;
+static const Int_t UNDERSHOOT_MIN_POINTS    = FrostmonConfig::UNDERSHOOT_MIN_POINTS;
+
+
 // -----------------------------
 // Utilities & Models
 // -----------------------------
@@ -388,6 +393,83 @@ static double estimate_baseline(const std::vector<double>& wf) {
   return std::isfinite(best) ? best : 0.0;
 }
 
+// Make an undershoot mask: once we find RUN consecutive samples <= THR,
+// all samples from the first of those RUN to the end are marked as undershoot.
+static std::vector<bool> make_undershoot_mask(const std::vector<double>& wf,
+                                              int &first_idx_out)
+{
+  const int ns = (int)wf.size();
+  std::vector<bool> mask(ns, false);
+  first_idx_out = -1;  // default: no undershoot
+  if (ns <= 0) return mask;
+
+  const double THR = (double)UNDERSHOOT_ADC_THRESHOLD;
+  const int RUN   = UNDERSHOOT_MIN_POINTS;
+
+  int cnt = 0;
+
+  for (int j = 0; j < ns; ++j) {
+    if (wf[j] <= THR) {
+      if(cnt == 0){
+        //start a new run here
+        cnt = 1;
+      }else{
+        // require strictly decreasing to extend the run
+        if (wf[j-1] >= wf[j]) {
+          ++cnt;
+        } else {
+          // threshold is satisfied but not decreasing: restart run
+          cnt = 1;
+        }
+      }
+
+      if (cnt == RUN) {
+        first_idx_out = j - RUN + 1;  // first sample of undershoot
+        break;
+      }
+    } else {
+      cnt = 0;
+    }
+  }
+
+  if (first_idx_out >= 0) {
+    for (int j = first_idx_out; j < ns; ++j) {
+      mask[j] = true;
+    }
+  }
+
+  return mask;
+}
+
+
+// Estimate baseline using sliding windows, excluding masked (undershoot) samples.
+static double estimate_baseline_masked(const std::vector<double>& wf,
+                                       const std::vector<bool>& mask)
+{
+  const int ns = (int)wf.size();
+  if (ns <= 0) return 0.0;
+  const int startMaxEff = std::min(std::max(0, ns - BL_WIN), BL_START_MAX);
+
+  double best = std::numeric_limits<double>::infinity();
+  for (int start = 1; start <= startMaxEff; start += BL_STEP) {
+    const int end = std::min(ns, start + BL_WIN);
+
+    double sum = 0.0;
+    int    cnt = 0;
+
+    for (int j = start; j < end; ++j) {
+      if (!mask.empty() && mask[j]) continue;
+      sum += wf[j];
+      ++cnt;
+    }
+    if (cnt == 0) continue; // window is fully masked
+
+    const double ave = sum / (double)cnt;
+    if (ave < best) best = ave;
+  }
+  return std::isfinite(best) ? best : 0.0;
+}
+
 static double integrate_adc_minus_baseline(const std::vector<double>& wf, double baseline, int int_min) {
   const int ns = (int)wf.size();
   if (ns <= INT_RANGE) return 0.0;
@@ -398,6 +480,22 @@ static double integrate_adc_minus_baseline(const std::vector<double>& wf, double
   for (int j = jmin; j < jmax; ++j) {
     integ += (wf[j] - baseline);
   }
+  return integ;
+}
+
+// Integrate ADC waveform over an arbitrary sample range [jmin, jmax)
+// after subtracting the given baseline. Indices are clamped to the
+// valid waveform range.
+static double integrate_adc_range(const std::vector<double>& wf,
+                                  double baseline,
+                                  int jmin, int jmax) {
+  const int ns = (int)wf.size();
+  if (ns <= 0) return 0.0;
+  jmin = std::max(0, jmin);
+  jmax = std::min(jmax, ns);
+  if (jmin >= jmax) return 0.0;
+  double integ = 0.0;
+  for (int j = jmin; j < jmax; ++j) integ += (wf[j] - baseline);
   return integ;
 }
 
@@ -412,11 +510,12 @@ static bool spillbit_from_waveform(const std::vector<double>& wf) {
   return false;
 }
 
+
 static std::vector<double> calculate_leading_fromadc(const std::vector<double>& wf) {
   std::vector<double> leading_adc;
   const int ns = (int)wf.size();
   for(int j=0; j<ns-1; ++j){
-    if(wf[j] < ADC_THRESHOLD && wf[j+1] > ADC_THRESHOLD){
+    if(wf[j] < ADC_THRESHOLD && wf[j+1] >= ADC_THRESHOLD){
       leading_adc.push_back((double)(j+1));
     }
   }
@@ -427,7 +526,7 @@ static std::vector<double> calculate_trailing_fromadc(const std::vector<double>&
   std::vector<double> trailing_adc;
   const int ns = (int)wf.size();
   for(int j=0; j<ns-1; ++j){
-    if(wf[j] > ADC_THRESHOLD && wf[j+1] < ADC_THRESHOLD){
+    if(wf[j] >= ADC_THRESHOLD && wf[j+1] < ADC_THRESHOLD){
       trailing_adc.push_back((double)(j+1));
     }
   }
@@ -483,6 +582,10 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   double out_lightyield[NOUT][NBUNCH];
   double out_unixtime[NOUT];
   int out_spillnum;
+  int out_pileup_flag[NOUT];
+  int out_undershoot_flag[NOUT];
+  // hit_bunch is stored as vector<vector<double>> to use ROOT's existing STL dictionary
+  auto   out_hit_bunch = new std::vector<std::vector<double>>();
   auto   out_leading  = new std::vector<std::vector<double>>();
   auto   out_trailing = new std::vector<std::vector<double>>();
   auto   out_leading_fromadc  = new std::vector<std::vector<double>>();
@@ -495,6 +598,9 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   tout.Branch("lightyield", out_lightyield, Form("lightyield[%d][%d]/D",   NOUT, NBUNCH));
   tout.Branch("unixtime", out_unixtime,  Form("unixtime[%d]/D", NOUT));
   tout.Branch("spillnum", &out_spillnum,  "spillnum/I");
+  tout.Branch("pileup_flag", out_pileup_flag, Form("pileup_flag[%d]/I", NOUT));
+  tout.Branch("undershoot_flag", out_undershoot_flag, Form("undershoot_flag[%d]/I", NOUT));
+  tout.Branch("hit_bunch",  &out_hit_bunch);
   tout.Branch("leading",  &out_leading);
   tout.Branch("trailing", &out_trailing);
   tout.Branch("leading_fromadc",  &out_leading_fromadc);
@@ -519,12 +625,15 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
     out_leading->assign(NOUT, std::vector<double>());
     out_trailing->assign(NOUT, std::vector<double>());
     out_leading_fromadc->assign(NOUT, std::vector<double>());
+    out_hit_bunch->assign(NOUT, std::vector<double>());
     out_trailing_fromadc->assign(NOUT, std::vector<double>());
 
     for (int i = 0; i < NOUT; ++i) {
       out_rayraw[i]   = fixed_rayraw[i];
       out_rayrawch[i] = fixed_rayrawch[i];
       out_unixtime[i] = unixtime;
+      out_pileup_flag[i] = 0;
+      out_undershoot_flag[i] = 0;
       for(int bunch=0; bunch<NBUNCH; ++bunch){
         out_lightyield[i][bunch] = std::numeric_limits<double>::quiet_NaN();
       }
@@ -561,11 +670,237 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
         double adcint[NBUNCH] = {0.0};
         const auto& wf = waveform->at(ch);
-        if ((int)wf.size() > sampling_first_bunch) {
-          const double bl = estimate_baseline(wf);
-          for (int bunch = 0; bunch < NBUNCH; ++bunch) {
-            const int int_min = sampling_first_bunch + (int)(bunch * BUNCH_INTERVAL);
-            adcint[bunch] = integrate_adc_minus_baseline(wf, bl, int_min);
+        const int ns = (int)wf.size();
+
+        // Calculate leading/trailing indices from ADC threshold
+        auto leading_adc  = calculate_leading_fromadc(wf);
+        auto trailing_adc = calculate_trailing_fromadc(wf);
+        (*out_leading_fromadc)[idx]  = leading_adc;
+        (*out_trailing_fromadc)[idx] = trailing_adc;
+
+        // Determine which bunches have hits based on leading_fromadc
+        bool hit_b[NBUNCH] = {false};
+        const double start_all = (double)sampling_first_bunch;
+        const double end_all   = (double)sampling_first_bunch + (double)NBUNCH * BUNCH_INTERVAL;
+
+        for (double t_lead : leading_adc) {
+          if (t_lead < start_all || t_lead >= end_all) continue;
+          int b = static_cast<int>((t_lead - start_all) / BUNCH_INTERVAL);
+          if (b >= 0 && b < NBUNCH) {
+            hit_b[b] = true;
+          }
+        }
+
+        // Additional pileup check: even if leading is not found in the next bunch,
+        // compare waveform at the boundary and in the next bunch region.
+        if (ns > 0) {
+          for (int b = 0; b < NBUNCH - 1; ++b) {
+            if (!hit_b[b] || hit_b[b+1]) continue;
+
+            double boundary_pos = (double)sampling_first_bunch + (double)(b+1) * BUNCH_INTERVAL;
+            int jb = static_cast<int>(boundary_pos);
+            if (jb < 0 || jb >= ns) continue;
+            double boundary_val = wf[jb];
+
+            double start_next = (double)sampling_first_bunch + (double)(b+1) * BUNCH_INTERVAL;
+            double end_next   = (double)sampling_first_bunch + (double)(b+2) * BUNCH_INTERVAL;
+            int j_from = static_cast<int>(start_next);
+            int j_to   = static_cast<int>(end_next);
+
+            j_from = std::max(0, std::min(ns - 1, j_from));
+            j_to   = std::max(j_from + 1, std::min(ns, j_to));
+
+            double max_val = boundary_val;
+            for (int j = j_from; j < j_to; ++j) {
+              if (wf[j] > max_val) max_val = wf[j];
+            }
+
+            // If the maximum in the next bunch region is sufficiently higher
+            // than the boundary value, treat the next bunch as having a hit.
+            if (max_val > boundary_val + PILEUP_THRESHOLD) {
+              hit_b[b+1] = true;
+            }
+          }
+        }
+
+        // Fill hit_bunch vector for this channel (store bunch index as double)
+        auto &hit_vec = (*out_hit_bunch)[idx];
+        for (int b = 0; b < NBUNCH; ++b) {
+          if (hit_b[b]) hit_vec.push_back(static_cast<double>(b));
+        }
+
+          if (ns > sampling_first_bunch) {
+          // Build undershoot mask and estimate baseline excluding undershoot region.
+          int undershoot_first = -1;
+          auto undershoot_mask = make_undershoot_mask(wf, undershoot_first);
+
+
+          // Set channel-level undershoot flag if any sample is masked
+          bool has_undershoot = std::any_of(undershoot_mask.begin(),
+                                            undershoot_mask.end(),
+                                            [](bool v){ return v; });
+          if (has_undershoot) {
+            out_undershoot_flag[idx] = 1;
+          }
+
+          const double bl = estimate_baseline_masked(wf, undershoot_mask);
+
+          // Precompute integer start sample for each bunch
+          int start_sample[NBUNCH];
+          for (int b = 0; b < NBUNCH; ++b) {
+            double pos = (double)sampling_first_bunch + (double)b * BUNCH_INTERVAL;
+            start_sample[b] = static_cast<int>(pos);
+          }
+
+          // Build clusters of consecutive hit bunches
+          std::vector<std::pair<int,int>> clusters; // [b_start, b_end] inclusive
+          int b = 0;
+          while (b < NBUNCH) {
+            if (!hit_b[b]) {
+              ++b;
+              continue;
+            }
+            int b_start = b;
+            while ((b + 1) < NBUNCH && hit_b[b + 1]) {
+              ++b;
+            }
+            int b_end = b;
+            clusters.emplace_back(b_start, b_end);
+            ++b;
+          }
+
+          // Mark bunches whose integration region overlaps with a hit
+          // in neighboring bunches (both after and before).
+          bool overlapped[NBUNCH] = {false};
+          for (int hb = 0; hb < NBUNCH; ++hb) {
+            if (!hit_b[hb]) continue;
+
+            // Next bunch (hb+1): its integration window starts later but
+            // still overlaps with the tail of the hit in hb because
+            // INT_RANGE > BUNCH_INTERVAL.
+            int nb = hb + 1;
+            if (nb < NBUNCH && !hit_b[nb]) {
+              overlapped[nb] = true;
+            }
+
+            // Previous bunch (hb-1): its integration window extends forward
+            // into the hit region of hb, again because INT_RANGE > BUNCH_INTERVAL.
+            int pb = hb - 1;
+            if (pb >= 0 && !hit_b[pb]) {
+              overlapped[pb] = true;
+            }
+          }
+
+          // Mark bunches whose integration window overlaps with undershoot region.
+          bool undershoot_bunch[NBUNCH] = {false};
+          int  first_undershoot_bunch = -1;
+
+          for (int bb = 0; bb < NBUNCH; ++bb) {
+            int jmin = start_sample[bb];
+            int jmax = jmin + INT_RANGE;
+            if (jmin >= ns) continue;
+            jmax = std::min(jmax, ns);
+
+            for (int j = jmin; j < jmax; ++j) {
+              if (!undershoot_mask.empty() && undershoot_mask[j]) {
+                undershoot_bunch[bb] = true;
+                overlapped[bb] = true; // treat as "masked" bunch
+                if (first_undershoot_bunch < 0) {
+                  first_undershoot_bunch = bb;
+                }
+                break;
+              }
+            }
+          }
+
+          // Integrate hit clusters:
+          //  - Single-bunch hit: integrate over INT_RANGE from bunch start
+          //  - Consecutive hits (pileup cluster): last bunch over INT_RANGE,
+          //    previous ones over one-bunch interval [b, b+1)
+          for (const auto &cl : clusters) {
+            int b_start = cl.first;
+            int b_end   = cl.second;
+            int cluster_size = b_end - b_start + 1;
+
+            if (cluster_size == 1) {
+              int b0 = b_start;
+              int jmin = start_sample[b0];
+              int jmax = jmin + INT_RANGE;
+              adcint[b0] = integrate_adc_range(wf, bl, jmin, jmax);
+            } else {
+              // Pileup cluster for this channel
+              out_pileup_flag[idx] = 1;
+              for (int bb = b_start; bb <= b_end; ++bb) {
+                int jmin = start_sample[bb];
+                int jmax;
+                if (bb == b_end) {
+                  // Last bunch in cluster: integrate over INT_RANGE
+                  jmax = jmin + INT_RANGE;
+                } else {
+                  // Previous bunches: integrate over one bunch interval
+                  jmax = start_sample[bb + 1];
+                }
+                adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+              }
+            }
+          }
+
+          // Bunches without hits and not overlapped: integrate over INT_RANGE
+          // and remember them as donors for overlapped bunches.
+          std::vector<int> donors;
+          for (int bb = 0; bb < NBUNCH; ++bb) {
+            if (hit_b[bb] || overlapped[bb]) continue;
+            int jmin = start_sample[bb];
+            int jmax = jmin + INT_RANGE;
+            adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+            donors.push_back(bb);
+          }
+
+          // --- Special treatment for the first undershoot bunch ---
+          // If undershoot exists and the first undershoot-affected bunch has a hit,
+          // integrate only up to the undershoot starting index and DO NOT overwrite
+          // this bunch with a donor value later.
+          if (undershoot_first >= 0 &&
+              first_undershoot_bunch >= 0 &&
+              hit_b[first_undershoot_bunch]) {
+
+            int b0   = first_undershoot_bunch;
+            int jmin = start_sample[b0];
+            int jmax = std::min(undershoot_first, ns);  // integrate up to undershoot start
+
+            if (jmax > jmin) {
+              adcint[b0] = integrate_adc_range(wf, bl, jmin, jmax);
+            } else {
+              // Undershoot starts before or at the bunch start: nothing to integrate
+              adcint[b0] = 0.0;
+            }
+
+            // Prevent donor replacement for this bunch
+            overlapped[b0] = false;
+          }
+
+          // For overlapped bunches (including undershoot-overlapped),
+          // reuse the integral from the nearest donor bunch.
+          for (int bb = 0; bb < NBUNCH; ++bb) {
+            if (!overlapped[bb]) continue;
+
+            if (donors.empty()) {
+              // No donor available: fall back to integrating over INT_RANGE.
+              int jmin = start_sample[bb];
+              int jmax = jmin + INT_RANGE;
+              adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+            } else {
+              int best_d   = donors[0];
+              int best_dist = std::abs(bb - donors[0]);
+              for (int d : donors) {
+                int dist = std::abs(bb - d);
+                if (dist < best_dist) {
+                  best_dist = dist;
+                  best_d = d;
+                }
+              }
+              adcint[bb] = adcint[best_d];
+            }
           }
         }
 
@@ -606,10 +941,6 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
             / ((one_pe_base - zero_pe_base) * (m1_ref - m0_ref));
           out_lightyield[idx][bunch] = ly_raw * corr_factor;
         }
-
-        // leading/trailing_fromadc
-        (*out_leading_fromadc)[idx]  = calculate_leading_fromadc(wf);
-        (*out_trailing_fromadc)[idx] = calculate_trailing_fromadc(wf);
 
         // copy existing leading/trailing if available
         if (leading && (int)leading->size() > ch)   (*out_leading)[idx]  = leading->at(ch);

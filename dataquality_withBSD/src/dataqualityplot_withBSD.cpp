@@ -305,6 +305,7 @@ struct BsdSpill {
   int spillnum_full = 0;   // full spillnumber
   int spillnum_mod  = 0;   // low 15 bits
   int good_spill_flag = 0;
+  int spill_flag = 0;
   int trg_sec = 0;         // trg_sec[2]
   double pot = 0.0;        // ct_np[4][0]
 };
@@ -341,6 +342,7 @@ static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
     Int_t spillnum = 0;
     Int_t trg_sec_arr[3] = {0,0,0};
     Int_t good_spill_flag = 0;
+    Int_t spill_flag = 0;
     Double_t ct_np[5][9];
 
     t->SetBranchStatus("spillnum", 1);
@@ -352,6 +354,9 @@ static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
     t->SetBranchStatus("good_spill_flag", 1);
     t->SetBranchAddress("good_spill_flag", &good_spill_flag);
 
+    t->SetBranchStatus("spill_flag", 1);
+    t->SetBranchAddress("spill_flag", &spill_flag);
+
     t->SetBranchStatus("ct_np", 1);
     t->SetBranchAddress("ct_np", ct_np);
 
@@ -360,12 +365,14 @@ static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
       t->GetEntry(ie);
 
       // If you want to include bad spills also, comment out next 2 lines
-      if (good_spill_flag == 0) continue;
+      // if (good_spill_flag == 0) continue;
+      if (spill_flag == 0) continue;
 
       BsdSpill s;
       s.spillnum_full   = spillnum;
       s.spillnum_mod    = spillnum & (SPILL_MOD - 1); // 15 bits
       s.good_spill_flag = good_spill_flag;
+      s.spill_flag      = spill_flag;
       s.trg_sec         = trg_sec_arr[2];             // trg_sec[2]
       s.pot             = ct_np[4][0];                // ct_np[4][0]
 

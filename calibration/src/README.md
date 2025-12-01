@@ -416,8 +416,11 @@ For each run `<RUNNAME>`:
   - `cablenum[272]/I`, `rayraw[272]/I`, `rayrawch[272]/I`  
   - `lightyield[272][8]/D`, `unixtime[272]/D`  
   - `spillnum/I`
-  - `leading`, `trailing` (vector<vector<double>>)  
-  - `leading_fromadc`, `trailing_fromadc` (computed from waveform threshold crossing)
+  - `pileup_flag[272]/I`           (per-channel pile-up flag)  
+  - `undershoot_flag[272]/I`       (per-channel undershoot / long-tail flag)  
+  - `hit_bunch`                    (vector<vector<double>>; bunch indices with ADC hits)  
+  - `leading`, `trailing`          (vector<vector<double>>)  
+  - `leading_fromadc`, `trailing_fromadc` (computed from ADC threshold crossings)
 
 The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute **raw** per-channel light yield,
 which is then multiplied by a **per-cable correction factor** from `lightyield_correctionfactor.csv`.
@@ -469,6 +472,82 @@ All bits are combined into an integer and stored in `spillnum`.
 
 Which `(RAYRAW, ch)` channels are used for each spill bit is defined by the
 spill chmap selected for that run (either from `--spillchmap` or `chmap_spillnum_rules.txt`).
+
+
+### Bunch integration, pile-up and undershoot handling
+
+Because the integration range `INT_RANGE` is larger than the bunch spacing
+`BUNCH_INTERVAL`, naively integrating a fixed-width window starting at
+`sampling_first_bunch + bunch * BUNCH_INTERVAL` for every bunch would cause
+significant overlap between neighboring bunches. The converter therefore performs
+**hit-aware integration** using both the waveform and ADC-threshold timing:
+
+- For each channel, `leading_fromadc` and `trailing_fromadc` are reconstructed from
+  ADC threshold crossings (`ADC_THRESHOLD`).
+- From these, the code determines which bunches contain a hit and records them in
+  the `hit_bunch` branch. Consecutive hit bunches are treated as a **pile-up
+  cluster**, and the channel-level `pileup_flag` is set to `1`.
+- For an isolated hit bunch, the integration window is a full `INT_RANGE` starting
+  at the nominal bunch start:
+
+  ```text
+  start_sample = sampling_first_bunch + bunch * BUNCH_INTERVAL
+  window       = [start_sample, start_sample + INT_RANGE)
+  ```
+
+- For a pile-up cluster spanning multiple consecutive bunches:
+  - The **last** bunch in the cluster integrates a full `INT_RANGE` starting from
+    its nominal start sample.
+  - The **earlier** bunches integrate only over a single-bunch interval
+    `[start(b), start(b+1))`, reducing double-counting of the same physical pulse
+    across several bunches.
+
+In addition, long undershoot / saturation tails are handled via an
+**undershoot mask**:
+
+- An undershoot region is detected once the waveform remains below
+  `UNDERSHOOT_ADC_THRESHOLD` for at least `UNDERSHOOT_MIN_POINTS` consecutive
+  samples with a non-increasing trend.
+- All samples from the first such point to the end of the waveform are marked as
+  “undershoot”. If any undershoot is found, the channel-level
+  `undershoot_flag` is set to `1`.
+- The DC baseline is estimated using sliding windows that **exclude** masked
+  (undershoot) samples, so the baseline is not biased by long negative tails.
+
+Because `INT_RANGE > BUNCH_INTERVAL`, some nominal bunch windows would still
+overlap hit regions or undershoot regions in neighboring bunches. To avoid this:
+
+- Bunches **without hits** and **without such overlap** are integrated normally
+  over `INT_RANGE`. These bunches act as **donors** providing a clean
+  “dark-noise only” integral.
+- Bunches whose integration window would significantly overlap a neighboring hit
+  or undershoot (“overlapped” bunches) do **not** get an independent integral.
+  Instead, they reuse the integral from the nearest donor bunch.
+- For the **first undershoot-affected bunch that also has a hit**, the integral
+  is computed only up to the start of the undershoot region; this bunch is not
+  replaced by a donor value.
+
+As a result:
+
+- Hit bunches integrate around the true pulse with reduced cross-talk to
+  neighboring bunches and with explicit pile-up tagging (`pileup_flag`).
+- Non-hit bunches still carry a realistic dark-noise integral (rather than
+  exactly zero), enabling studies of 1–3 p.e.-level dark noise even in the
+  presence of neighboring bunch activity and long tails.
+
+### Relevant configuration parameters
+
+The following constants are defined in `config.hpp` and control the behavior
+described above:
+
+- `PILEUP_THRESHOLD` (default: `10.0` ADC counts): minimum excess of the maximum
+  amplitude in the next-bunch region above the boundary sample to classify the
+  next bunch as having a pile-up hit.
+- `UNDERSHOOT_ADC_THRESHOLD` (default: `500` ADC counts) and
+  `UNDERSHOOT_MIN_POINTS` (default: `8` samples): conditions used to detect the
+  onset of a long undershoot region that should be masked from baseline
+  estimation and integration.
+
 ---
 
 ## Help

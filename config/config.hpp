@@ -63,6 +63,11 @@ namespace FrostmonConfig {
     static const Int_t SPILL_BIT_ADC_THRESHOLD = 600;
     static const Int_t SPILL_BIT_MIN_POINTS    = 5;
 
+    static const Double_t PILEUP_THRESHOLD = 10.0; // threshold to set pileup flag
+
+    static constexpr int UNDERSHOOT_ADC_THRESHOLD = 500;
+    static constexpr int UNDERSHOOT_MIN_POINTS    = 8;
+
 // ----- dataqualityplot parameters -----
     // Timing hist settings
     static const Int_t    NBINS_TDC = 2048;
