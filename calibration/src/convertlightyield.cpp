@@ -80,6 +80,7 @@ static const Double_t PILEUP_THRESHOLD = FrostmonConfig::PILEUP_THRESHOLD;
 static const Int_t UNDERSHOOT_ADC_THRESHOLD = FrostmonConfig::UNDERSHOOT_ADC_THRESHOLD;
 static const Int_t UNDERSHOOT_MIN_POINTS    = FrostmonConfig::UNDERSHOOT_MIN_POINTS;
 
+static const double ADC_MIN = FrostmonConfig::ADC_MIN; // threshold for baseline and integration
 
 // -----------------------------
 // Utilities & Models
@@ -378,19 +379,32 @@ static LightYieldCorrMap load_lightyield_corr(const char* fname) {
 static double estimate_baseline(const std::vector<double>& wf) {
   const int ns = (int)wf.size();
   if (ns <= 0) return 0.0;
+
   const int startMaxEff = std::min(std::max(0, ns - BL_WIN), BL_START_MAX);
 
   double best = std::numeric_limits<double>::infinity();
+
   for (int start = 1; start <= startMaxEff; start += BL_STEP) {
-    const int end   = std::min(ns, start + BL_WIN);
-    const int width = end - start;
-    if (width <= 0) continue;
+    const int end = std::min(ns, start + BL_WIN);
+    if (end <= start) continue;
+
     double sum = 0.0;
-    for (int j = start; j < end; ++j) sum += wf[j];
-    const double ave = sum / (double)width;
+    int    cnt = 0;
+
+    for (int j = start; j < end; ++j) {
+      const double v = wf[j];
+      if (v <= ADC_MIN) continue;  // skip samples below ADC_MIN
+      sum += v;
+      ++cnt;
+    }
+
+    if (cnt == 0) continue;        // no valid samples in this window
+
+    const double ave = sum / static_cast<double>(cnt);
     if (ave < best) best = ave;
   }
-  return std::isfinite(best) ? best : 0.0;
+
+  return std::isfinite(best) ? best : 511.0;
 }
 
 // Make an undershoot mask: once we find RUN consecutive samples <= THR,
@@ -448,56 +462,80 @@ static double estimate_baseline_masked(const std::vector<double>& wf,
 {
   const int ns = (int)wf.size();
   if (ns <= 0) return 0.0;
+
   const int startMaxEff = std::min(std::max(0, ns - BL_WIN), BL_START_MAX);
 
   double best = std::numeric_limits<double>::infinity();
+
   for (int start = 1; start <= startMaxEff; start += BL_STEP) {
     const int end = std::min(ns, start + BL_WIN);
+    if (end <= start) continue;
 
     double sum = 0.0;
     int    cnt = 0;
 
     for (int j = start; j < end; ++j) {
-      if (!mask.empty() && mask[j]) continue;
-      sum += wf[j];
+      if (!mask.empty() && mask[j]) continue;  // skip undershoot-masked samples
+      const double v = wf[j];
+      if (v <= ADC_MIN) continue;              // skip samples below ADC_MIN
+      sum += v;
       ++cnt;
     }
-    if (cnt == 0) continue; // window is fully masked
 
-    const double ave = sum / (double)cnt;
+    if (cnt == 0) continue;                    // window has no valid samples
+
+    const double ave = sum / static_cast<double>(cnt);
     if (ave < best) best = ave;
   }
-  return std::isfinite(best) ? best : 0.0;
+
+  return std::isfinite(best) ? best : 511.0;
 }
 
-static double integrate_adc_minus_baseline(const std::vector<double>& wf, double baseline, int int_min) {
+static double integrate_adc_minus_baseline(const std::vector<double>& wf,
+                                           double baseline,
+                                           int int_min)
+{
   const int ns = (int)wf.size();
   if (ns <= INT_RANGE) return 0.0;
-  const int jmin = int_min;
-  const int jmax = std::min(int_min + INT_RANGE, ns - 1);
-  if (jmin > jmax) return 0.0;
+
+  const int jmin_raw = int_min;
+  const int jmax_raw = int_min + INT_RANGE;
+  int jmin = std::max(0, jmin_raw);
+  int jmax = std::min(jmax_raw, ns);
+  if (jmin >= jmax) return 0.0;
+
   double integ = 0.0;
   for (int j = jmin; j < jmax; ++j) {
-    integ += (wf[j] - baseline);
+    const double v = wf[j];
+    if (v <= ADC_MIN) continue;        // skip samples below ADC_MIN
+    integ += (v - baseline);
   }
   return integ;
 }
 
 // Integrate ADC waveform over an arbitrary sample range [jmin, jmax)
 // after subtracting the given baseline. Indices are clamped to the
-// valid waveform range.
+// valid waveform range. Samples below ADC_MIN are ignored.
 static double integrate_adc_range(const std::vector<double>& wf,
                                   double baseline,
-                                  int jmin, int jmax) {
+                                  int jmin, int jmax)
+{
   const int ns = (int)wf.size();
   if (ns <= 0) return 0.0;
+
   jmin = std::max(0, jmin);
   jmax = std::min(jmax, ns);
   if (jmin >= jmax) return 0.0;
+
   double integ = 0.0;
-  for (int j = jmin; j < jmax; ++j) integ += (wf[j] - baseline);
+  for (int j = jmin; j < jmax; ++j) {
+    const double v = wf[j];
+    if (v <= ADC_MIN) continue;        // skip samples below ADC_MIN
+    integ += (v - baseline);
+  }
   return integ;
 }
+
 
 static bool spillbit_from_waveform(const std::vector<double>& wf) {
   int count = 0;

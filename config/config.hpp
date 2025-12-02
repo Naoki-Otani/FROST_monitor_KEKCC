@@ -50,6 +50,9 @@ namespace FrostmonConfig {
     const Double_t SPEC_SIGMA   = 3.0;
     const Double_t SPEC_THRESH  = 0.05;
 
+    // ADC threshold to exclude unphysical low values
+    static constexpr double ADC_MIN = 505.0;
+
 // ----- convertlightyield parameters -----
     static const Int_t INT_RANGE = 75;
     static const Int_t ADC_THRESHOLD = 520; //threshold for leading/trailing_fromadc

@@ -91,6 +91,9 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
   const Double_t SPEC_SIGMA   = FrostmonConfig::SPEC_SIGMA;
   const Double_t SPEC_THRESH  = FrostmonConfig::SPEC_THRESH;
 
+  // ADC thresholds (exclude unphysical low values)
+  const double ADC_MIN = FrostmonConfig::ADC_MIN;
+
   // ---------- chmap load ----------
   std::map<long long, int> cabMap; // key = ((long long)rr << 32) | (unsigned)lc
   {
@@ -183,7 +186,7 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
       const Int_t ns = (Int_t) wf.size();
       if (ns <= 0) continue;
 
-      // ---- Baseline (min of sliding-mean windows) ----
+      // ---- Baseline (minimum of sliding-mean windows, ignoring values below ADC_MIN_BASELINE) ----
       Int_t startMaxEff = std::max(0, ns - BL_WIN);
       startMaxEff = std::min(startMaxEff, BL_START_MAX);
 
@@ -191,18 +194,32 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
       {
         std::vector<double> bl_values;
         bl_values.reserve((startMaxEff / BL_STEP) + 2);
+
         for (Int_t start = 1; start <= startMaxEff; start += BL_STEP) {
-          double sum = 0.0;
-          const Int_t end = std::min(ns, start + BL_WIN);
+          double sum   = 0.0;
+          int    count = 0;
+
+          const Int_t end   = std::min(ns, start + BL_WIN);
           const Int_t width = end - start;
           if (width <= 0) continue;
-          for (Int_t j = start; j < end; ++j) sum += wf[j];
-          bl_values.push_back(sum / (double)width);
+
+          for (Int_t j = start; j < end; ++j) {
+            const double v = wf[j];
+            if (v <= ADC_MIN) continue;  // skip samples below ADC threshold
+            sum += v;
+            ++count;
+          }
+
+          if (count == 0) continue;  // this window has no valid samples
+          bl_values.push_back(sum / static_cast<double>(count));
         }
+
+        // if no valid window exists, skip this channel/event
         if (bl_values.empty()) continue;
         std::sort(bl_values.begin(), bl_values.end());
         baseline = bl_values.front();
       }
+
 
       // ---- Global maximum sample (variable window center) ----
       Int_t peak_idx = 0;
@@ -211,7 +228,7 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
         if (wf[j] > peak_val) { peak_val = wf[j]; peak_idx = j; }
       }
 
-      // ---- Variable-window integration around the peak ----
+      // ---- Variable-window integration around the peak (ignore samples below ADC_MIN_INTEGRAL) ----
       {
         Int_t jmin, jmax;
         if (peak_idx < INT_LEFT) {
@@ -223,26 +240,37 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
         } else {
           jmin = peak_idx - INT_LEFT;
           jmax = peak_idx + INT_RIGHT;
-          if (jmin < 0) jmin = 0;
+          if (jmin < 0)      jmin = 0;
           if (jmax > ns - 1) jmax = ns - 1;
         }
 
         double integral1 = 0.0;
-        for (Int_t j = jmin; j < jmax; ++j) integral1 += (wf[j] - baseline);
+        for (Int_t j = jmin; j < jmax; ++j) {
+          const double v = wf[j];
+          if (v <= ADC_MIN) continue;  // skip samples below ADC threshold
+          integral1 += (v - baseline);
+        }
+
         if (peak_idx > INT_LEFT && peak_idx < ns - 1 - INT_RIGHT) {
           h1->Fill(integral1);
         }
       }
 
-      // ---- Fixed-window integration [1 .. FIX_RANGE) ----
+
+      // ---- Fixed-window integration [FIX_START .. FIX_START + FIX_RANGE) (ignore samples below ADC_MIN_INTEGRAL) ----
       {
         const Int_t jmax_fix = std::min(ns, FIX_START + FIX_RANGE);
         if (jmax_fix > FIX_START) {
           double integral0 = 0.0;
-          for (Int_t j = FIX_START; j < jmax_fix; ++j) integral0 += (wf[j] - baseline);
+          for (Int_t j = FIX_START; j < jmax_fix; ++j) {
+            const double v = wf[j];
+            if (v <= ADC_MIN) continue;  // skip samples below ADC threshold
+            integral0 += (v - baseline);
+          }
           h0->Fill(integral0);
         }
       }
+
     }
   }
 

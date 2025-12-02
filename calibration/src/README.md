@@ -10,7 +10,11 @@ Optionally, it can **continuously watch** the directory and process new files as
 > - The file size is **at least 10 KB**  
 > - The file size has not changed for **at least 60 seconds**  
 > These conditions prevent processing files that are still being written by the DAQ or converter.
-
+> **ADC thresholding in baseline and integration**  
+> During both baseline estimation and waveform integration, any waveform samples with
+> ADC values **at or below `ADC_MIN`** (defined in `config.hpp`) are ignored.  
+> This suppresses unphysical low ADC values and prevents them from biasing the
+> baseline or the 0 p.e./1 p.e. peak fits.
 ---
 
 ## Directory Layout (default)
@@ -148,6 +152,7 @@ The CSV columns:
 4. Check if a corresponding CSV exists — skip if already processed.
 5. For each unprocessed & ready file:
    - Perform waveform integration and peak fitting (0pe and 1pe)
+   - During both baseline estimation and integration, ignore samples with ADC ≤ `ADC_MIN`
    - Save plots and calibration CSV
 6. (Optional) Repeat automatically at intervals if `--watch` is specified.
 
@@ -479,7 +484,16 @@ spill chmap selected for that run (either from `--spillchmap` or `chmap_spillnum
 Because the integration range `INT_RANGE` is larger than the bunch spacing
 `BUNCH_INTERVAL`, naively integrating a fixed-width window starting at
 `sampling_first_bunch + bunch * BUNCH_INTERVAL` for every bunch would cause
-significant overlap between neighboring bunches. The converter therefore performs
+significant overlap between neighboring bunches. 
+
+In addition, both the DC baseline estimation and all ADC integrations
+(per-bunch integrals) **ignore samples with ADC values at or below `ADC_MIN`**
+(as configured in `config.hpp`).  
+This common threshold is shared with the calibration step and avoids
+unphysical low values or pathological samples from contaminating the baseline
+or the computed light yield.
+
+The converter therefore performs
 **hit-aware integration** using both the waveform and ADC-threshold timing:
 
 - For each channel, `leading_fromadc` and `trailing_fromadc` are reconstructed from
@@ -540,6 +554,9 @@ As a result:
 The following constants are defined in `config.hpp` and control the behavior
 described above:
 
+- `ADC_MIN`: ADC threshold below which samples are ignored in both baseline
+  estimation and waveform integration (used consistently in calibration and
+  light-yield conversion).
 - `PILEUP_THRESHOLD` (default: `10.0` ADC counts): minimum excess of the maximum
   amplitude in the next-bunch region above the boundary sample to classify the
   next bunch as having a pile-up hit.
