@@ -972,53 +972,83 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
 }
 
 // ------------------------
-// Main loop
+// Helpers for per-run PDF management
 // ------------------------
 
-static void OneIteration(int refresh_ms) {
-  // Make sure output directories exist
-  gSystem->mkdir(PATH_OUT_TDC.c_str(),  true);
-  gSystem->mkdir(PATH_OUT_LY.c_str(),   true);
-  gSystem->mkdir(PATH_OUT_XY.c_str(),   true);
-  gSystem->mkdir(PATH_OUT_UNIXTIME.c_str(), true);
-  gSystem->mkdir(PATH_OUT_SPILLNUM.c_str(), true);
+// Check if all expected PDFs for a given run already exist.
+// If any of them is missing, this returns false.
+static bool RunPdfsExist(const std::string& runTag)
+{
+  auto fileExists = [](const std::string& p) {
+    // AccessPathName returns 0 if the file exists.
+    return (gSystem->AccessPathName(p.c_str()) == kFALSE);
+  };
 
-  // List all files and decide latest run
-  auto all = ListLightyieldFiles(PATH_ROOT);
-  if (all.empty()) {
-    ::Info("dataqualityplot", "No *_lightyield.root yet in: %s", PATH_ROOT.c_str());
-    gSystem->Sleep(refresh_ms);
-    return;
+  // Timing histograms (TDC / ADC)
+  const std::string baseT = PATH_OUT_TDC + runTag;
+  if (!fileExists(baseT + "_leading_hist.pdf"))          return false;
+  if (!fileExists(baseT + "_trailing_hist.pdf"))         return false;
+  if (!fileExists(baseT + "_leading_fromadc_hist.pdf"))  return false;
+  if (!fileExists(baseT + "_trailing_fromadc_hist.pdf")) return false;
+
+  // Average lightyield per channel
+  if (!fileExists(PATH_OUT_LY + runTag + "_chavg_lightyield_hist.pdf")) return false;
+
+  // xg–yg 2D
+  if (!fileExists(PATH_OUT_XY + runTag + "_xgyg.pdf")) return false;
+
+  // evnum vs unixtime
+  if (!fileExists(PATH_OUT_UNIXTIME + runTag + "_evnum_vs_unixtime.pdf")) return false;
+
+  // evnum vs spillnum
+  if (!fileExists(PATH_OUT_SPILLNUM + runTag + "_evnum_vs_spillnum.pdf")) return false;
+
+  // RAYRAW-wise per-channel lightyield PDFs
+  for (int p = 1; p <= FrostmonConfig::N_RAYRAW; ++p) {
+    TString name = TString::Format("%s%s_RAYRAW#%02d.pdf",
+                                   PATH_OUT_LY_EACHCH.c_str(),
+                                   runTag.c_str(), p);
+    if (!fileExists(name.Data())) return false;
   }
 
-  std::string runTag = "";
-  for (const auto& fi : all) { runTag = ExtractRunTag(fi.path); if (!runTag.empty()) break; }
-  if (runTag.empty()) { gSystem->Sleep(refresh_ms); return; }
+  return true;
+}
 
-  // Collect "ready" files for the latest run
-  auto runFiles = FilterByRun(all, runTag);
-  std::vector<FileInfoLite> stableFiles;
+// Collect "ready" lightyield files for a given runTag from the full file list.
+// Returns true if at least one ready file is found.
+static bool CollectStableFilesForRun(const std::string& runTag,
+                                     const std::vector<FileInfoLite>& allFiles,
+                                     std::vector<FileInfoLite>& stableFilesOut)
+{
+  stableFilesOut.clear();
+  auto runFiles = FilterByRun(allFiles, runTag);
   for (const auto& fi : runFiles) {
-    if (IsReadyLightyieldFile(fi)) stableFiles.push_back(fi);
+    if (IsReadyLightyieldFile(fi)) {
+      stableFilesOut.push_back(fi);
+    }
   }
+  return !stableFilesOut.empty();
+}
 
-  if (stableFiles.empty()) {
-    ::Info("dataqualityplot",
-           "No ready *_lightyield.root for run %s "
-           "(require size >= 1MB and stable >= 60s).",
-           runTag.c_str());
-    gSystem->Sleep(refresh_ms);
-    return;
-  }
-
+// Produce all per-run PDFs (timing, average LY, per-channel LY, xg-yg,
+// evnum vs unixtime, evnum vs spillnum) for a given run and its ready files.
+static void MakeRunPdfs(const std::string& runTag,
+                        const std::vector<FileInfoLite>& stableFiles)
+{
   // Timing histograms
-  std::unique_ptr<TH1D> h_lead(CreateHistTiming("h_leading", true,  "Leading","leading"));
-  std::unique_ptr<TH1D> h_trail(CreateHistTiming("h_trailing", true, "Trailing","trailing"));
-  std::unique_ptr<TH1D> h_lead_adc(CreateHistTiming("h_leading_adc", false,  "Leading_fromADC","leading_fromADC"));
-  std::unique_ptr<TH1D> h_trail_adc(CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC","trailing_fromADC"));
+  std::unique_ptr<TH1D> h_lead(
+      CreateHistTiming("h_leading", true,  "Leading","leading"));
+  std::unique_ptr<TH1D> h_trail(
+      CreateHistTiming("h_trailing", true, "Trailing","trailing"));
+  std::unique_ptr<TH1D> h_lead_adc(
+      CreateHistTiming("h_leading_adc", false,  "Leading_fromADC","leading_fromADC"));
+  std::unique_ptr<TH1D> h_trail_adc(
+      CreateHistTiming("h_trailing_adc", false, "Trailing_fromADC","trailing_fromADC"));
 
   for (const auto& fi : stableFiles) {
-    FillHistsTimingFromFile(h_lead.get(), h_trail.get(), h_lead_adc.get(), h_trail_adc.get(), fi.path);
+    FillHistsTimingFromFile(h_lead.get(), h_trail.get(),
+                            h_lead_adc.get(), h_trail_adc.get(),
+                            fi.path);
   }
 
   DrawAndSaveTiming(h_lead.get(),      runTag, "leading");
@@ -1026,25 +1056,103 @@ static void OneIteration(int refresh_ms) {
   DrawAndSaveTiming(h_lead_adc.get(),  runTag, "leading_fromadc");
   DrawAndSaveTiming(h_trail_adc.get(), runTag, "trailing_fromadc");
 
-  // Average LY per channel
+  // Average lightyield per channel (>=10 p.e.)
   std::vector<double> sum(NOUT, 0.0);
   std::vector<int>    cnt(NOUT, 0);
-  for (const auto& fi : stableFiles) AccumulateLyAvgPerChannel(sum, cnt, fi.path);
+  for (const auto& fi : stableFiles) {
+    AccumulateLyAvgPerChannel(sum, cnt, fi.path);
+  }
   BuildAndSaveLyAvgHist(sum, cnt, runTag);
 
-  // per-channel lightyield histograms (RAYRAW-wise)
+  // Per-channel lightyield histograms (RAYRAW planes)
   BuildAndSaveLyEachChannel(runTag, stableFiles);
 
-  // xg–yg
+  // xg–yg 2D barycenter
   BuildAndSaveXY2D(runTag, stableFiles);
 
-  // evnum–unixtime
+  // evnum vs unixtime
   BuildAndSaveEvTime(runTag, stableFiles);
 
-  // evnum–spillnum
+  // evnum vs spillnum
   BuildAndSaveSpillnum(runTag, stableFiles);
+}
 
-  // LY avg history 2D (all runs, 6h bins, incremental)
+// ------------------------
+// Main loop
+// ------------------------
+
+static void OneIteration(int refresh_ms) {
+  // Ensure output directories exist.
+  gSystem->mkdir(PATH_OUT_TDC.c_str(),       true);
+  gSystem->mkdir(PATH_OUT_LY.c_str(),        true);
+  gSystem->mkdir(PATH_OUT_XY.c_str(),        true);
+  gSystem->mkdir(PATH_OUT_UNIXTIME.c_str(),  true);
+  gSystem->mkdir(PATH_OUT_SPILLNUM.c_str(),  true);
+  gSystem->mkdir(PATH_OUT_LY_EACHCH.c_str(), true);
+
+  // List all *_lightyield.root files (sorted by mtime in descending order).
+  auto all = ListLightyieldFiles(PATH_ROOT);
+  if (all.empty()) {
+    ::Info("dataqualityplot", "No *_lightyield.root yet in: %s", PATH_ROOT.c_str());
+    gSystem->Sleep(refresh_ms);
+    return;
+  }
+
+  // Determine the latest runTag from the newest file that matches "runXXXXX".
+  std::string latestRunTag = "";
+  for (const auto& fi : all) {
+    latestRunTag = ExtractRunTag(fi.path);
+    if (!latestRunTag.empty()) break;
+  }
+  if (latestRunTag.empty()) {
+    gSystem->Sleep(refresh_ms);
+    return;
+  }
+
+  // 1. Always update PDFs for the latest run (online monitoring).
+  {
+    std::vector<FileInfoLite> stableFilesLatest;
+    if (CollectStableFilesForRun(latestRunTag, all, stableFilesLatest)) {
+      MakeRunPdfs(latestRunTag, stableFilesLatest);
+    } else {
+      ::Info("dataqualityplot",
+             "No ready *_lightyield.root for latest run %s "
+             "(require size >= 10kB and stable >= 60s).",
+             latestRunTag.c_str());
+    }
+  }
+
+  // 2. Backfill older runs: if some run does not have all PDFs yet, create them once.
+  {
+    // Collect unique run tags (excluding the latest run), in descending mtime order.
+    std::vector<std::string> runTags;
+    for (const auto& fi : all) {
+      std::string tag = ExtractRunTag(fi.path);
+      if (tag.empty() || tag == latestRunTag) continue;
+      if (std::find(runTags.begin(), runTags.end(), tag) == runTags.end()) {
+        runTags.push_back(tag);
+      }
+    }
+
+    for (const auto& tag : runTags) {
+      // Skip runs that already have all PDFs.
+      if (RunPdfsExist(tag)) continue;
+
+      // Skip runs that have no ready ROOT files.
+      std::vector<FileInfoLite> stableFiles;
+      if (!CollectStableFilesForRun(tag, all, stableFiles)) continue;
+
+      ::Info("dataqualityplot",
+             "Backfilling plots for run %s (some PDFs are missing).",
+             tag.c_str());
+      MakeRunPdfs(tag, stableFiles);
+
+      // To limit CPU load, only backfill one run per iteration.
+      break;
+    }
+  }
+
+  // 3. Lightyield history (6-hour bins, all runs) is updated incrementally as before.
   BuildAndSaveLyAvgHistory2D_Binned();
 
   gSystem->Sleep(refresh_ms);

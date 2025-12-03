@@ -119,3 +119,8 @@ the program **outputs all available events up to the end of the file** and print
 
 4. **Early Exit for Speed**
    - Processing stops once the event number exceeds `end_event`
+
+---
+
+## Author
+Naoki Otani

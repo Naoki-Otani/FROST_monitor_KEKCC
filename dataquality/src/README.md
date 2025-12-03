@@ -1,6 +1,8 @@
 # Data Quality Plotter (ROOT, C++)
 
-This program monitors a directory where ROOT files (from `convertlightyield_rayraw`) are created in real time and generates several data-quality plots for the **latest run**, plus a time-history 2D plot accumulated across **all runs** in the directory with **6-hour time bins**.
+This program monitors a directory where ROOT files (from `convertlightyield`) are created in real time and generates several data-quality plots for the **latest run** (online monitoring), plus a time-history 2D plot accumulated across **all runs** in the directory with **6-hour time bins**.
+
+In addition to the online monitoring of the latest run, the program also **backfills per-run PDFs for older runs**: if a run has “ready” ROOT files but some expected PDFs are missing, those PDFs are generated once, even if the run is not the latest.
 
 It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
 
@@ -72,6 +74,13 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
 
 ---
 
+### Per-run plot behavior
+
+- The **latest run** is always processed every iteration (online monitoring); its per-run PDFs are **continuously updated** as new data arrive.
+- For **older runs**, if the program finds “ready” ROOT files and detects that one or more expected PDFs are **missing**, it generates the full set of per-run PDFs for that run **once** (backfill). Once all PDFs exist, that run is skipped in subsequent iterations.
+- The **6-hour binned lightyield history 2D plot** is always accumulated over **all runs** and updated incrementally, independent of which run is latest.
+---
+
 ## Requirements
 
 - ROOT (tested with ROOT 6).  
@@ -112,12 +121,14 @@ g++ -O2 -std=c++17 dataqualityplot.cpp -o dataqualityplot $(root-config --cflags
   and are named like:  
   `run00103_0_9999_lightyield.root`, `run00103_10000_19999_lightyield.root`, …
 
-- The program determines the **latest run** by the most recently modified file and extracts its `runNNNNN` tag, aggregating all the fragments of that run, but **only** if each `*_lightyield.root` file:
-  - has size **≥ 1 MB**, and
-  - passes a short internal size-stability check (no growth), and
-  - has not been modified in the last **60 seconds**.
+- The program determines the **latest run** by the most recently modified file and extracts its `runNNNNN` tag, aggregating all the fragments of that run, but **only** if each `*_lightyield.root` file is considered **“ready”**:
+  - file size is at least **10 KB**, and
+  - the size stays stable in a short internal check (~500 ms), and
+  - the file has not been modified in the last **60 seconds**.
 
   Files that do **not** satisfy these conditions are treated as “not ready” and ignored in that iteration.
+
+  For runs **other than the latest**, the same “ready file” conditions are applied. If a non-latest run has at least one ready ROOT file and some of its per-run PDFs are missing, the program generates the full set of per-run PDFs for that run (backfill) in one of the subsequent iterations.
 
 
 - Tree layout (as produced by `convertlightyield_rayraw_*`):
@@ -165,6 +176,5 @@ via a call to `unixTimeLocal(2025, 11, 29, 18, 0, 0)` in the source code.
 
 ---
 
-## License
-
-MIT (or your preferred internal license).
+## Author
+Naoki Otani

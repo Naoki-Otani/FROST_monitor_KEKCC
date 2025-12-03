@@ -51,3 +51,8 @@ It prints periodic status. Stop with Ctrl‑C.
 - LSF environment is loaded on every SSH call via `/opt/lsf/conf/profile.lsf`.
 - Only worker jobs live on KEKCC; no dispatcher chains or resident processes.
 - Concurrency throttling applies to jobs with name prefix `rayraw_`.
+
+---
+
+## Author
+Naoki Otani

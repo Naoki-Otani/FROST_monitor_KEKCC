@@ -57,3 +57,8 @@ crontab -e
 - It handles both GNU and BSD/macOS versions of `stat` and `date` commands.
 - Output files are written atomically to avoid race conditions.
 - Timezone is fixed to **Asia/Tokyo**.
+
+---
+
+## Author
+Naoki Otani

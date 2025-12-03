@@ -581,3 +581,8 @@ described above:
 - **`std::filesystem` link error** → add `-lstdc++fs` (old GCC)  
 - **`root-config` not found** → source your ROOT environment (`thisroot.sh`)  
 - **Missing outputs** → Check that the input ROOT file exists under `rootfile/` and the corresponding `calib_<RUNNAME>.csv` exists under `calibration/calibresult/`
+
+---
+
+## Author
+Naoki Otani

@@ -213,7 +213,5 @@ kill <PID>
 
 ---
 
-If you need a C++ version or a variant with file-system event watching
-(e.g. using `inotify` for near real-time updates), it can be implemented as well,
-but for this use case the Bash + `rsync` version is usually the simplest and
-most maintainable solution.
+## Author
+Naoki Otani
