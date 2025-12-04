@@ -1,80 +1,3 @@
-// dataqualityplot_withBSD.cpp
-// Purpose:
-//   Standalone C++17 program using ROOT to generate:
-//     (1) Accumulated POT vs time plot
-//         - Delivered POT from BSD (black curve, "Delivered")
-//         - POT recorded by FROST (red curve, "Recorded by FROST")
-//     (2) Event-rate plot of neutrino-like events
-//         - Neutrino-like event defined as: for each bunch (0–7),
-//           max(lightyield[ch][b]) >= 10 → counts as 1 event
-//         - Event rate = (#events per day) / (Recorded POT of the day)
-//         - Units: events / 1×10^14 POT
-//         - Output: eventrate_plot/eventrate_frost.pdf
-//     (3) JS summary files for HTML dashboard
-//
-// BSD Input:
-//   Directory: /group/nu/ninja/work/otani/FROST_beamdata/test/bsd/
-//   Tree name: "bsd"
-//   Used branches:
-//     * spillnum          (full 32-bit spill number)
-//     * trg_sec[3]        → use trg_sec[2] (Unix time)
-//     * good_spill_flag   (0=bad; 1,–1,2,3,–3,100 are good beams)
-//     * ct_np[5][9]       → use ct_np[4][0] (POT)
-//
-// Lightyield Input:
-//   Directory: /group/nu/ninja/work/otani/FROST_beamdata/test/rootfile_aftercalib/
-//   Tree name: "tree"
-//   Used branches:
-//     * spillnum          (15-bit; 0–32767 wraps)
-//     * unixtime[272]     → use unixtime[0]
-//     * lightyield[272][8]  // used for neutrino-like event counting
-//
-// Matching rule (per reconstructed event):
-//   1) key = (spillnum & 0x7FFF)                 // 15-bit modulo
-//   2) Find BSD spills sharing this key
-//   3) Among them, select the one satisfying:
-//         |bsd.trg_sec − round(unixtime[0])| ≤ 5 seconds
-//      choosing the minimal |Δt|
-//   4) Each BSD spill contributes its POT at most once per lightyield file
-//   5) Neutrino-like events are counted per bunch (0–7)
-//
-// Incremental update strategy:
-//   - BSD files: always fully re-read (small data volume)
-//   - Lightyield files: incremental processing using:
-//       * processed_lightyield.tsv  → records (path, mtime)
-//       * pot_points.tsv            → stores accumulated POT increments
-//       * nu_events.tsv             → stores times of neutrino-like events
-//
-// Outputs (all under /group/nu/ninja/work/otani/FROST_beamdata/test/dataquality_withBSD):
-//
-//   1. Cache files:
-//        pot_points.tsv
-//        processed_lightyield.tsv
-//        nu_events.tsv
-//
-//   2. PDF plots:
-//        accumulated_pot_withBSD.pdf
-//        eventrate_plot/eventrate_frost.pdf
-//
-//   3. JS summary files (for the web dashboard):
-//        pot_info/period.js
-//        pot_info/delivered_spills.js
-//        pot_info/recorded_spills.js
-//        pot_info/delivered_pot.js
-//        pot_info/recorded_pot.js
-//        pot_info/efficiency.js
-//
-// Build example:
-//   g++ -O2 -std=c++17 dataqualityplot_withBSD.cpp -o dataqualityplot_withBSD \
-//       $(root-config --cflags --libs)
-//
-// Run examples:
-//   ./dataqualityplot_withBSD                   // infinite loop, refresh every 10 min
-//   ./dataqualityplot_withBSD -n 1              // run once
-//   ./dataqualityplot_withBSD -n -1 -r 5000     // infinite loop, refresh every 5 sec
-
-
-
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
@@ -90,6 +13,8 @@
 #include <TROOT.h>
 #include <TLatex.h>
 #include <TLegend.h>
+#include <TF1.h>
+#include <TPaveText.h>
 #include <TColor.h>
 #include <TError.h>
 
@@ -105,6 +30,7 @@
 #include <limits>
 #include <cmath>
 #include <ctime>
+#include <cctype>
 #include <regex>
 #include <memory>
 #include "/home/nu/notani/FROST_monitor/config/config.hpp"
@@ -136,10 +62,19 @@ static const std::string PATH_OUT_PDF    =
 
 static const std::string PATH_EVENTRATE_DIR =
   PATH_OUT_BASE + "eventrate_plot/";
-static const std::string PATH_NU_EVENTS  =
-  PATH_EVENTRATE_DIR + "neutrino_events.tsv";
+static const std::string PATH_EVENT  =
+  PATH_EVENTRATE_DIR + "eventrate.tsv";
 static const std::string PATH_EVENTRATE_PDF =
   PATH_EVENTRATE_DIR + "eventrate_plot.pdf";
+
+// For "max 1 event per spill" counting
+static const std::string PATH_EVENT_SPILL =
+  PATH_EVENTRATE_DIR + "eventrate_spill.tsv";
+static const std::string PATH_EVENTRATE_PDF_SPILL =
+  PATH_EVENTRATE_DIR + "eventrate_plot_spill.pdf";
+
+static const std::string PATH_ACQUIRED_BUNCH_DIR =
+  PATH_OUT_BASE + "acquired_bunch/";
 
 static const char* BSD_TREE_NAME  = "bsd";
 static const char* LY_TREE_NAME   = "tree";
@@ -153,7 +88,7 @@ static const int SPILL_MOD = FrostmonConfig::SPILL_MOD; // 15-bit modulo for spi
 
 static const int MAX_TIME_DIFF = FrostmonConfig::MAX_TIME_DIFF; // seconds
 
-static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold for neutrino event
+static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold for event
 
 // ------------------------
 // Small helpers
@@ -279,7 +214,7 @@ static std::string FormatSciForHtml(double val)
   double mant = val / std::pow(10.0, exp);
 
   std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2) << mant
+  oss << std::fixed << std::setprecision(4) << mant
       << " &times; 10<sup>" << exp << "</sup>";
   return oss.str();
 }
@@ -301,13 +236,103 @@ static void WriteJsFile(const std::string& path, const std::string& payload)
 // BSD spills
 // ------------------------
 
+// Rule for acquired bunches per DAQ run, read from:
+//   PATH_ACQUIRED_BUNCH_DIR + "acquired_bunch_rules.txt"
+// Format example:
+//   # run_max  acquired_bunch
+//   5    1,2
+//   9999 0
+// Here, runs 1-5 have only bunch 1 and 2 acquired, and runs 6-9999 have all 8 bunches.
+struct AcquiredBunchRule {
+  int run_max = 0;
+  bool all_bunches = false;          // true if all 8 bunches are acquired
+  std::vector<int> bunch_list;       // 1-based bunch indices (1..8) when not all_bunches
+};
+
+static void LoadAcquiredBunchRules(std::vector<AcquiredBunchRule>& rules)
+{
+  rules.clear();
+
+  const std::string path = PATH_ACQUIRED_BUNCH_DIR + "acquired_bunch_rules.txt";
+  std::ifstream fin(path);
+  if (!fin) {
+    ::Info("dataqualityplot_withBSD",
+           "No acquired_bunch_rules.txt found at %s. Assuming all 8 bunches for all runs.",
+           path.c_str());
+    return;
+  }
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty() || line[0] == '#') continue;
+
+    std::istringstream iss(line);
+    int run_max = 0;
+    std::string bunch_str;
+    if (!(iss >> run_max >> bunch_str)) continue;
+
+    AcquiredBunchRule rule;
+    rule.run_max = run_max;
+    if (bunch_str == "0") {
+      // 0 means "all 8 bunches"
+      rule.all_bunches = true;
+    } else {
+      rule.all_bunches = false;
+      std::stringstream ss(bunch_str);
+      std::string token;
+      while (std::getline(ss, token, ',')) {
+        if (token.empty()) continue;
+        int b = std::stoi(token);
+        if (b >= 1 && b <= 8) {
+          rule.bunch_list.push_back(b);
+        }
+      }
+    }
+    rules.push_back(std::move(rule));
+  }
+
+  std::sort(rules.begin(), rules.end(),
+            [](const AcquiredBunchRule& a, const AcquiredBunchRule& b){
+              return a.run_max < b.run_max;
+            });
+}
+
+// Return bit mask for acquired bunches for a given run number.
+// bit 0 corresponds to bunch 1, ..., bit 7 to bunch 8.
+// If no rule matches, or run <= 0, return 0xFF (all 8 bunches).
+static unsigned char GetAcquiredBunchMaskForRun(int run,
+                                                const std::vector<AcquiredBunchRule>& rules)
+{
+  if (run <= 0 || rules.empty()) return 0xFF;
+
+  for (const auto& r : rules) {
+    if (run <= r.run_max) {
+      if (r.all_bunches || r.bunch_list.empty()) return 0xFF;
+      unsigned char mask = 0u;
+      for (int b : r.bunch_list) {
+        if (b >= 1 && b <= 8) {
+          mask |= static_cast<unsigned char>(1u << (b - 1));
+        }
+      }
+      if (mask == 0u) mask = 0xFF;
+      return mask;
+    }
+  }
+  return 0xFF;
+}
+
+
 struct BsdSpill {
   int spillnum_full = 0;   // full spillnumber
   int spillnum_mod  = 0;   // low 15 bits
   int good_spill_flag = 0;
   int spill_flag = 0;
   int trg_sec = 0;         // trg_sec[2]
-  double pot = 0.0;        // ct_np[4][0]
+  // Total POT over all 8 bunches (ct_np[4][0])
+  double pot = 0.0;
+  // POT per bunch (ct_np[4][1]..ct_np[4][8]):
+  // pot_bunch[0] -> bunch 1, ..., pot_bunch[7] -> bunch 8
+  double pot_bunch[8] = {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
 };
 
 static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
@@ -374,7 +399,12 @@ static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
       s.good_spill_flag = good_spill_flag;
       s.spill_flag      = spill_flag;
       s.trg_sec         = trg_sec_arr[2];             // trg_sec[2]
-      s.pot             = ct_np[4][0];                // ct_np[4][0]
+      s.pot             = ct_np[4][0];                // total POT (all bunches)
+
+      // Store POT per bunch: ct_np[4][1]..ct_np[4][8]
+      for (int b = 0; b < 8; ++b) {
+        s.pot_bunch[b] = ct_np[4][b + 1];
+      }
 
       size_t idx = bsd_spills.size();
       bsd_spills.push_back(s);
@@ -425,9 +455,12 @@ static void SaveProcessedLyFiles(const std::unordered_map<std::string, Long_t>& 
 
 static void AppendPotPoints(const std::vector<std::pair<double,double>>& new_points)
 {
-  if (new_points.empty()) return;
+  // This function rewrites the entire POT points file
+  // using the provided list. This ensures that all available lightyield files
+  // are always fully reflected in the cache.
 
-  std::ofstream fout(PATH_POT_POINTS, std::ios::app);
+  gSystem->mkdir(PATH_POT_PLOT.c_str(), true);
+  std::ofstream fout(PATH_POT_POINTS, std::ios::trunc);
   if (!fout) {
     ::Warning("dataqualityplot_withBSD",
               "Failed to open pot_points file for append: %s",
@@ -435,26 +468,8 @@ static void AppendPotPoints(const std::vector<std::pair<double,double>>& new_poi
     return;
   }
 
-  // check header
-  static bool header_written = false;
-  static bool header_checked = false;
-
-  if (!header_checked) {
-    std::ifstream fin(PATH_POT_POINTS);
-    header_written = false;
-    if (fin) {
-      std::string firstLine;
-      if (std::getline(fin, firstLine)) {
-        if (!firstLine.empty() && firstLine[0] == '#') header_written = true;
-      }
-    }
-    header_checked = true;
-  }
-
-  if (!header_written) {
-    fout << "#time pot_increment\n";
-    header_written = true;
-  }
+  // Always write header
+  fout << "#time pot_increment\n";
 
   fout << std::setprecision(16);
   for (const auto& p : new_points) {
@@ -462,44 +477,50 @@ static void AppendPotPoints(const std::vector<std::pair<double,double>>& new_poi
   }
 }
 
-// Append neutrino event timestamps (Unix time [s]) to PATH_NU_EVENTS.
+// Append event timestamps (Unix time [s]) to PATH_EVENT.
 // Each line:  time
 static void AppendNuEvents(const std::vector<double>& nu_times)
 {
-  if (nu_times.empty()) return;
-
-  // Ensure the parent directory exists before opening the file
+  // This function rewrites the entire events
+  // file using the provided list. This ensures that all available lightyield
+  // files are always fully reflected in the cache.
   gSystem->mkdir(PATH_EVENTRATE_DIR.c_str(), true);
-  std::ofstream fout(PATH_NU_EVENTS, std::ios::app);
+  std::ofstream fout(PATH_EVENT, std::ios::trunc);
   if (!fout) {
     ::Warning("dataqualityplot_withBSD",
-              "Failed to open neutrino events file for append: %s",
-              PATH_NU_EVENTS.c_str());
+              "Failed to open events file for append: %s",
+              PATH_EVENT.c_str());
     return;
   }
 
-  static bool header_written = false;
-  static bool header_checked = false;
-
-  if (!header_checked) {
-    std::ifstream fin(PATH_NU_EVENTS);
-    header_written = false;
-    if (fin) {
-      std::string firstLine;
-      if (std::getline(fin, firstLine)) {
-        if (!firstLine.empty() && firstLine[0] == '#') header_written = true;
-      }
-    }
-    header_checked = true;
-  }
-
-  if (!header_written) {
-    fout << "#time\n";
-    header_written = true;
-  }
+  // Always write header
+  fout << "#time\n";
 
   fout << std::setprecision(16);
   for (double t : nu_times) {
+    fout << t << "\n";
+  }
+}
+
+// Append event timestamps (Unix time [s]) to PATH_EVENT_SPILL.
+// Each line: time
+// Here, at most one entry is stored per spill (if any bunch had a hit).
+static void AppendNuEventsSpill(const std::vector<double>& nu_times_spill)
+{
+  gSystem->mkdir(PATH_EVENTRATE_DIR.c_str(), true);
+  std::ofstream fout(PATH_EVENT_SPILL, std::ios::trunc);
+  if (!fout) {
+    ::Warning("dataqualityplot_withBSD",
+              "Failed to open eventsrate (per spill) file for write: %s",
+              PATH_EVENT_SPILL.c_str());
+    return;
+  }
+
+  // Always write header
+  fout << "#time\n";
+
+  fout << std::setprecision(16);
+  for (double t : nu_times_spill) {
     fout << t << "\n";
   }
 }
@@ -508,12 +529,31 @@ static void AppendNuEvents(const std::vector<double>& nu_times)
 // Process lightyield file -> find POT increments
 // ------------------------
 
+// Extract DAQ run number from a lightyield file path.
+// Example: ".../run00003_140000_149999_lightyield.root" -> 3
+static int ExtractRunNumberFromLyPath(const std::string& path)
+{
+  std::regex re("run(\\d{5})_");
+  std::smatch m;
+  if (std::regex_search(path, m, re)) {
+    try {
+      return std::stoi(m[1].str());
+    } catch (...) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+
 static void ProcessLightyieldFileForPOT(
     const std::string& path,
     const std::vector<BsdSpill>& bsd_spills,
     const std::unordered_map<int, std::vector<size_t>>& index_by_mod,
     std::vector<std::pair<double,double>>& out_new_points,
-    std::vector<double>& out_new_nu_times)
+    std::vector<double>& out_new_nu_times,
+    std::vector<double>& out_new_nu_times_spill,
+    const std::vector<AcquiredBunchRule>& acq_rules)
 {
   TFile f(path.c_str(), "READ");
   if (f.IsZombie()) {
@@ -545,6 +585,13 @@ static void ProcessLightyieldFileForPOT(
   t->SetBranchAddress("lightyield", lightyield_arr);
 
   const Long64_t nent = t->GetEntries();
+
+  // Determine DAQ run number and acquired bunch mask for this lightyield file.
+  // The run number is taken from the lightyield file name
+ // (e.g. run00003_... -> run = 3).
+ const int run_number = ExtractRunNumberFromLyPath(path);
+ const unsigned char acquired_bunch_mask = GetAcquiredBunchMaskForRun(run_number, acq_rules);
+
 
   std::unordered_set<size_t> used_bsd_indices;
   used_bsd_indices.reserve(1024);
@@ -579,34 +626,78 @@ static void ProcessLightyieldFileForPOT(
 
     const BsdSpill& s = bsd_spills[best_idx];
 
-    // Count "neutrino events" per bunch:
+    // Count "events" per bunch:
     // For each bunch (0..7), take the maximum lightyield over all channels.
-    // If max(lightyield[ch][b]) >= 10, that bunch contributes 1 event.
-    int n_nu_events_this_spill = 0;
-    for (int b = 0; b < 8; ++b) {
-      double ly_max_b = -1.0;
-      for (int ch = 0; ch < 272; ++ch) {
-        double v = lightyield_arr[ch][b];
-        if (std::isfinite(v) && v > ly_max_b) {
-          ly_max_b = v;
+    // If max(lightyield[ch][b]) >= threshold, that bunch contributes 1 event.
+    // When only a subset of bunches is acquired in this run, we consider
+    // only those bunches.
+    //
+    // In addition, we also keep track of whether this spill had at least one
+    // hit bunch, to build a "max 1 event per spill" event-rate plot.
+    int  n_nu_events_this_spill   = 0;     // per-bunch counting
+    bool has_nu_event_this_spill  = false; // per-spill flag
+    if (acquired_bunch_mask == 0xFF) {
+      // All 8 bunches acquired: use all bunch indices (0..7)
+      for (int b = 0; b < 8; ++b) {
+        double ly_max_b = -1.0;
+        for (int ch = 0; ch < 272; ++ch) {
+          double v = lightyield_arr[ch][b];
+          if (std::isfinite(v) && v > ly_max_b) {
+            ly_max_b = v;
+          }
         }
-        // if(v > LIGHTMAX_MIN){
-        //   std::cout << "ch" << ch << std::endl;
-        // }
+        if (ly_max_b >= LIGHTMAX_MIN) {
+          ++n_nu_events_this_spill;
+          has_nu_event_this_spill = true;
+        }
       }
-      if (ly_max_b >= LIGHTMAX_MIN) {
-        ++n_nu_events_this_spill;
+    } else {
+      // Only specific bunches acquired: consider only those bunch indices.
+      for (int b = 0; b < 8; ++b) {
+        if (!(acquired_bunch_mask & (1u << b))) continue;
+        double ly_max_b = -1.0;
+        for (int ch = 0; ch < 272; ++ch) {
+          double v = lightyield_arr[ch][b];
+          if (std::isfinite(v) && v > ly_max_b) {
+            ly_max_b = v;
+          }
+        }
+        if (ly_max_b >= LIGHTMAX_MIN) {
+          ++n_nu_events_this_spill;
+          has_nu_event_this_spill = true;
+        }
       }
     }
 
-    // Each neutrino event is stored as one entry at this spill time
+    // Each event (per bunch) is stored as one entry
+    // at this spill time.
     for (int i = 0; i < n_nu_events_this_spill; ++i) {
       out_new_nu_times.push_back(static_cast<double>(s.trg_sec));
     }
 
-    // For POT accumulation, avoid double counting the same BSD spill within this file
+    // For the "per-spill" counting, we store at most one entry per spill
+    // (if any bunch had a hit).
+    if (has_nu_event_this_spill) {
+      out_new_nu_times_spill.push_back(static_cast<double>(s.trg_sec));
+    }
+
+    // For POT accumulation, avoid double counting the same BSD spill within this file.
+    // The POT used here depends on the acquired bunch configuration of this run.
+    double pot_increment = 0.0;
+    if (acquired_bunch_mask == 0xFF) {
+      // All bunches: use total POT
+      pot_increment = s.pot;
+    } else {
+      // Only specific bunches: sum POT over those bunches
+      for (int b = 0; b < 8; ++b) {
+        if (acquired_bunch_mask & (1u << b)) {
+          pot_increment += s.pot_bunch[b];
+        }
+      }
+    }
+
     if (used_bsd_indices.insert(best_idx).second) {
-      out_new_points.emplace_back(static_cast<double>(s.trg_sec), s.pot);
+      out_new_points.emplace_back(static_cast<double>(s.trg_sec), pot_increment);
       ++match_count;
     }
   }
@@ -791,16 +882,6 @@ static void BuildAndSaveAccumulatedPotPlot(
   if (hasRecorded)  leg.AddEntry(gr_rec, "Recorded by FROST", "l");
   leg.Draw();
 
-  // Timestamp
-  TDatime now;
-  TLatex lat;
-  lat.SetNDC();
-  lat.SetTextSize(0.03);
-  lat.DrawLatex(0.7, 0.93,
-                Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
-                     now.GetYear(), now.GetMonth(), now.GetDay(),
-                     now.GetHour(), now.GetMinute(), now.GetSecond()));
-
   c.SaveAs(PATH_OUT_PDF.c_str());
 
   ::Info("dataqualityplot_withBSD",
@@ -814,8 +895,8 @@ static void BuildAndSaveAccumulatedPotPlot(
 // ------------------------
 // Build and save daily event-rate plot as a histogram:
 //   X: date (one bin per day, labeled as "MM/DD")
-//   Y: Number of events / 10^14 POT (for that day)
-//   Drawn with error bars only (no filled bins).
+//   Y: Number of events / 10^15 POT (for that day)
+//   Drawn with error bars only (no filled bins). Also performs a constant fit.
 // ------------------------
 static void BuildAndSaveEventRatePlot()
 {
@@ -853,12 +934,12 @@ static void BuildAndSaveEventRatePlot()
   }
   fin_pot.close();
 
-  // 2) Load daily neutrino event counts from neutrino_events.tsv
-  std::ifstream fin_nu(PATH_NU_EVENTS);
+  // 2) Load daily event counts from eventrate.tsv
+  std::ifstream fin_nu(PATH_EVENT);
   if (!fin_nu) {
     ::Warning("dataqualityplot_withBSD",
-              "No neutrino events file found: %s (cannot build event-rate plot).",
-              PATH_NU_EVENTS.c_str());
+              "No eventrate file found: %s (cannot build event-rate plot).",
+              PATH_EVENT.c_str());
     return;
   }
 
@@ -923,7 +1004,7 @@ static void BuildAndSaveEventRatePlot()
   gStyle->SetOptStat(0);
 
   TH1D h("h_eventrate",
-         "Event rate of FROST;Date;Number of events / 10^{14} POT",
+         "Event rate of FROST;Date;Number of events / 10^{15} POT",
          nbins, 0.5, nbins + 0.5);
   h.SetStats(0);
   h.SetFillStyle(0);        // no fill
@@ -943,8 +1024,8 @@ static void BuildAndSaveEventRatePlot()
     const long long n_events = it_nu->second;
     if (!(pot > 0.0) || n_events <= 0) continue;
 
-    const double rate     = static_cast<double>(n_events) * 1.0e14 / pot;
-    const double err_rate = std::sqrt(static_cast<double>(n_events)) * 1.0e14 / pot;
+    const double rate     = static_cast<double>(n_events) * 1.0e15 / pot;
+    const double err_rate = std::sqrt(static_cast<double>(n_events)) * 1.0e15 / pot;
 
     // std::cout << "rate" << rate << std::endl;
     // std::cout << "err_rate" << err_rate << std::endl;
@@ -975,12 +1056,264 @@ static void BuildAndSaveEventRatePlot()
 
   h.Draw("E1");  // error bars only (no filled boxes)
 
+  // Constant fit: y = p0 over all bins with content.
+  // Note: we filled the histogram with SetBinContent(), so GetEntries()
+  // is not reliable here. Instead, we explicitly check for non-empty bins.
+  int n_fit_bins = 0;
+  for (int ibin = 1; ibin <= h.GetNbinsX(); ++ibin) {
+    double y  = h.GetBinContent(ibin);
+    double ey = h.GetBinError(ibin);
+    if (y > 0.0 && ey > 0.0 && std::isfinite(y) && std::isfinite(ey)) {
+      ++n_fit_bins;
+    }
+  }
+
+
+  TF1* f_const = nullptr;
+  TPaveText* pt = nullptr;
+
+  if (n_fit_bins > 0) {
+    // constant function
+    f_const = new TF1("f_const", "[0]",
+                      h.GetXaxis()->GetXmin(),
+                      h.GetXaxis()->GetXmax());
+    f_const->SetLineWidth(2);
+    f_const->SetLineColor(kRed);
+
+    // Quiet fit (no printout)
+    h.Fit(f_const, "Q0");  // "0" = do not draw automatically
+
+    // Draw fit function on top of histogram
+    f_const->Draw("SAME");
+
+    // Stats box
+    double p0      = f_const->GetParameter(0);
+    double p0_err  = f_const->GetParError(0);
+    double chi2    = f_const->GetChisquare();
+    int    ndf     = f_const->GetNDF();
+
+    pt = new TPaveText(0.80, 0.90, 0.99, 0.99, "NDC");
+    pt->SetFillColor(0);
+    pt->SetFillStyle(0);
+    pt->SetLineColor(1);
+    pt->SetLineWidth(1);
+    pt->SetTextAlign(12);
+    pt->SetTextSize(0.03);
+    pt->AddText(Form("#chi^{2} / ndf = %.1f / %d", chi2, ndf));
+    pt->AddText(Form("p_{0} = %.3f #pm %.3f", p0, p0_err));
+    pt->Draw();
+  }
+
   c.SaveAs(PATH_EVENTRATE_PDF.c_str());
 
   ::Info("dataqualityplot_withBSD",
-         "Saved event-rate histogram to %s",
+         "Saved event-rate histogram (per bunch) to %s",
          PATH_EVENTRATE_PDF.c_str());
 }
+
+// Build and save daily event-rate plot as a histogram (per spill):
+//   X: date (one bin per day, labeled as "MM/DD")
+//   Y: Number of events / 10^15 POT (for that day)
+//   Here, each spill contributes at most one event (if any bunch fired).
+//   Drawn with error bars only (no filled bins). Also performs a constant fit.
+static void BuildAndSaveEventRatePlotSpill()
+{
+  // 1) Load daily POT from pot_points.tsv
+  std::ifstream fin_pot(PATH_POT_POINTS);
+  if (!fin_pot) {
+    ::Warning("dataqualityplot_withBSD",
+              "No pot_points file found: %s (cannot build per-spill event-rate plot).",
+              PATH_POT_POINTS.c_str());
+    return;
+  }
+
+  std::unordered_map<long long, double> pot_per_day;   // key: YYYYMMDD, value: POT sum
+  std::string line;
+  while (std::getline(fin_pot, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream iss(line);
+    double t = 0.0, p = 0.0;
+    if (!(iss >> t >> p)) continue;
+    if (!std::isfinite(t) || !std::isfinite(p)) continue;
+
+    std::time_t tt = static_cast<std::time_t>(t);
+    std::tm lt{};
+#if defined(_WIN32)
+    localtime_s(&lt, &tt);
+#else
+    lt = *std::localtime(&tt);
+#endif
+    long long day_key =
+      (static_cast<long long>(lt.tm_year + 1900) * 10000LL) +
+      (static_cast<long long>(lt.tm_mon + 1) * 100LL) +
+      static_cast<long long>(lt.tm_mday);
+
+    pot_per_day[day_key] += p;
+  }
+  fin_pot.close();
+
+  // 2) Load daily event counts from eventrate_spill.tsv
+  std::ifstream fin_nu(PATH_EVENT_SPILL);
+  if (!fin_nu) {
+    ::Warning("dataqualityplot_withBSD",
+              "No per-spill events file found: %s (cannot build per-spill event-rate plot).",
+              PATH_EVENT_SPILL.c_str());
+    return;
+  }
+
+  std::unordered_map<long long, long long> nu_per_day; // key: YYYYMMDD, value: event count
+  while (std::getline(fin_nu, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream iss(line);
+    double t = 0.0;
+    if (!(iss >> t)) continue;
+    if (!std::isfinite(t)) continue;
+
+    std::time_t tt = static_cast<std::time_t>(t);
+    std::tm lt{};
+#if defined(_WIN32)
+    localtime_s(&lt, &tt);
+#else
+    lt = *std::localtime(&tt);
+#endif
+    long long day_key =
+      (static_cast<long long>(lt.tm_year + 1900) * 10000LL) +
+      (static_cast<long long>(lt.tm_mon + 1) * 100LL) +
+      static_cast<long long>(lt.tm_mday);
+
+    nu_per_day[day_key] += 1;
+  }
+  fin_nu.close();
+
+  if (pot_per_day.empty() || nu_per_day.empty()) {
+    ::Warning("dataqualityplot_withBSD",
+              "No valid POT or per-spill neutrino data for event-rate plot.");
+    return;
+  }
+
+  // 3) Collect valid days (POT > 0 and events > 0)
+  std::vector<long long> day_keys_all;
+  day_keys_all.reserve(pot_per_day.size());
+  for (const auto& kv : pot_per_day) day_keys_all.push_back(kv.first);
+  std::sort(day_keys_all.begin(), day_keys_all.end());
+
+  std::vector<long long> day_keys;
+  day_keys.reserve(day_keys_all.size());
+  for (long long dk : day_keys_all) {
+    auto it_pot = pot_per_day.find(dk);
+    auto it_nu  = nu_per_day.find(dk);
+    if (it_pot == pot_per_day.end()) continue;
+    if (it_nu  == nu_per_day.end())  continue;
+    const double pot = it_pot->second;
+    const long long n_events = it_nu->second;
+    if (!(pot > 0.0) || n_events <= 0) continue;
+    day_keys.push_back(dk);
+  }
+
+  if (day_keys.empty()) {
+    ::Warning("dataqualityplot_withBSD",
+              "No valid daily points for per-spill event-rate plot (after cuts).");
+    return;
+  }
+
+  const int nbins = static_cast<int>(day_keys.size());
+
+  gSystem->mkdir(PATH_EVENTRATE_DIR.c_str(), true);
+  gStyle->SetOptStat(0);
+
+  TH1D h("h_eventrate_spill",
+         "Event rate of FROST (max 1 event per spill);Date;Number of events / 10^{15} POT",
+         nbins, 0.5, nbins + 0.5);
+  h.SetStats(0);
+  h.SetFillStyle(0);        // no fill
+  h.SetLineColor(kBlack);
+  h.SetLineWidth(2);
+  h.SetMarkerStyle(0);      // no marker
+  h.SetMarkerSize(0.0);
+
+  // Fill histogram bins and set bin labels (MM/DD)
+  for (int i = 0; i < nbins; ++i) {
+    long long dk = day_keys[i];
+    auto it_pot = pot_per_day.find(dk);
+    auto it_nu  = nu_per_day.find(dk);
+    if (it_pot == pot_per_day.end() || it_nu == nu_per_day.end()) continue;
+
+    const double pot        = it_pot->second;
+    const long long n_events = it_nu->second;
+    if (!(pot > 0.0) || n_events <= 0) continue;
+
+    const double rate     = static_cast<double>(n_events) * 1.0e15 / pot;
+    const double err_rate = std::sqrt(static_cast<double>(n_events)) * 1.0e15 / pot;
+
+    h.SetBinContent(i + 1, rate);
+    h.SetBinError(i + 1, err_rate);
+
+    int y = static_cast<int>(dk / 10000LL);
+    int m = static_cast<int>((dk / 100LL) % 100LL);
+    int d = static_cast<int>(dk % 100LL);
+
+    std::ostringstream lab;
+    lab << std::setw(2) << std::setfill('0') << m
+        << "/"
+        << std::setw(2) << std::setfill('0') << d;
+    h.GetXaxis()->SetBinLabel(i + 1, lab.str().c_str());
+  }
+
+  TCanvas c("c_eventrate_spill", "Event rate of FROST (max 1 event per spill)", 1200, 800);
+  c.SetGrid();
+  c.SetLeftMargin(0.12);
+
+  h.GetXaxis()->SetLabelSize(0.04);
+  h.GetXaxis()->LabelsOption("v");  // vertical labels if many days
+
+  h.Draw("E1");  // error bars only (no filled boxes)
+
+  // Constant fit: y = p0 over all bins with content.
+  int n_fit_bins = 0;
+  for (int ibin = 1; ibin <= h.GetNbinsX(); ++ibin) {
+    double y  = h.GetBinContent(ibin);
+    double ey = h.GetBinError(ibin);
+    if (y > 0.0 && ey > 0.0 && std::isfinite(y) && std::isfinite(ey)) {
+      ++n_fit_bins;
+    }
+  }
+
+  TF1* f_const = nullptr;
+  TPaveText* pt = nullptr;
+
+  if (n_fit_bins > 0) {
+    f_const = new TF1("f_const_spill", "[0]",
+                      h.GetXaxis()->GetXmin(),
+                      h.GetXaxis()->GetXmax());
+    f_const->SetLineWidth(2);
+    f_const->SetLineColor(kRed);
+
+    // Quiet fit (no printout)
+    h.Fit(f_const, "Q0");  // "0" = do not draw automatically
+
+   // Draw fit function on top of histogram
+   f_const->Draw("SAME");
+   // Stats box
+   double p0      = f_const->GetParameter(0);
+   double p0_err  = f_const->GetParError(0);
+   double chi2    = f_const->GetChisquare();
+   int    ndf     = f_const->GetNDF();
+   pt = new TPaveText(0.80, 0.90, 0.99, 0.99, "NDC");
+   pt->SetFillColor(0);
+   pt->SetFillStyle(0);
+   pt->SetLineColor(1);
+   pt->SetLineWidth(1);
+   pt->SetTextAlign(12);
+   pt->SetTextSize(0.03);
+   pt->AddText(Form("#chi^{2} / ndf = %.1f / %d", chi2, ndf));
+   pt->AddText(Form("p_{0} = %.3f #pm %.3f", p0, p0_err));
+   pt->Draw();
+ }
+ c.SaveAs(PATH_EVENTRATE_PDF_SPILL.c_str());
+ ::Info("dataqualityplot_withBSD",
+        "Saved per-spill event-rate histogram to %s",
+        PATH_EVENTRATE_PDF_SPILL.c_str());
+ }
 
 // ------------------------
 // One iteration
@@ -1007,55 +1340,53 @@ static void OneIteration(int refresh_ms)
   if (ly_files.empty()) {
     ::Info("dataqualityplot_withBSD",
            "No *_lightyield.root files in %s", PATH_LY_DIR.c_str());
-    // それでも Delivered だけは書けるので plot だけ実行
+    // Even in this case we can still draw the Delivered-only plot
     BuildAndSaveAccumulatedPotPlot(bsd_spills);
     gSystem->Sleep(refresh_ms);
     return;
   }
 
-  // 3) Load processed LY file list
-  std::unordered_map<std::string, Long_t> seen;
-  LoadProcessedLyFiles(seen);
+  // 3) Load acquired bunch rules
+  std::vector<AcquiredBunchRule> acq_rules;
+  LoadAcquiredBunchRules(acq_rules);
 
-  bool changed_seen = false;
-  std::vector<std::pair<double,double>> new_points;
-  std::vector<double>                   new_nu_times;
+  // In the updated version we always rebuild the POT and eventrate caches
+  // from all available (ready) lightyield files. This guarantees that the
+  // accumulated POT and event-rate plots are always based on the full dataset,
+  // not only on newly added files.
 
-  // 4) Process only new/updated and "ready" LY files
+  std::vector<std::pair<double,double>> all_points;
+  std::vector<double>                   all_nu_times;        // per-bunch counting
+  std::vector<double>                   all_nu_times_spill;  // max 1 event per spill
+
+  // 4) Process all "ready" lightyield files
   for (const auto& fi : ly_files) {
     if (!IsReadyLightyieldFile(fi)) continue;
-
-    auto it = seen.find(fi.path);
-    if (it != seen.end() && it->second == fi.mtime) {
-      // already processed with same mtime
-      continue;
-    }
 
     ProcessLightyieldFileForPOT(fi.path,
                                 bsd_spills,
                                 index_by_mod,
-                                new_points,
-                                new_nu_times);
-    seen[fi.path] = fi.mtime;
-    changed_seen = true;
+                                all_points,
+                                all_nu_times,
+                                all_nu_times_spill,
+                                acq_rules);
   }
 
-  // 5) Update caches
-  if (!new_points.empty()) {
-    AppendPotPoints(new_points);
-  }
-  if (!new_nu_times.empty()) {
-    AppendNuEvents(new_nu_times);
-  }
-  if (changed_seen) {
-    SaveProcessedLyFiles(seen);
-  }
+  // 5) Rewrite cache files so they represent all current data
+  AppendPotPoints(all_points);
+  // Per-bunch events (original definition)
+  AppendNuEvents(all_nu_times);
+  // Per-spill events (max 1 event per spill)
+  AppendNuEventsSpill(all_nu_times_spill);
 
   // 6) Build & save Accumulated POT plot (Delivered + Recorded)
   BuildAndSaveAccumulatedPotPlot(bsd_spills);
 
-  // 7) Build & save daily event-rate plot
+  // 7) Build & save daily event-rate plots
+  //    (1) Per-bunch counting (original definition)
+  //    (2) Per-spill counting (max 1 event per spill)
   BuildAndSaveEventRatePlot();
+  BuildAndSaveEventRatePlotSpill();
 
   gSystem->Sleep(refresh_ms);
 }

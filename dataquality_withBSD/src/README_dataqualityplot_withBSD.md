@@ -5,8 +5,8 @@
 `dataqualityplot_withBSD` is a standalone C++17 program using ROOT to monitor
 beam quality and FROST detector performance.  
 It automatically processes BSD beam-summary ROOT files and FROST lightyield
-ROOT files, produces POT accumulation plots, daily neutrino event-rate plots,
-and generates JavaScript summary files for a web dashboard.
+ROOT files, produces POT accumulation plots, daily event-rate plots (per bunch
+and per spill), and generates JavaScript summary files for a web dashboard.
 
 ---
 
@@ -21,20 +21,44 @@ and generates JavaScript summary files for a web dashboard.
   dataquality_withBSD/pot_plot/accumulated_pot_withBSD.pdf
   ```
 
-### 2. **Neutrino Event-Rate Plot**
-Neutrino-like event definition:
+### 2. **Event-Rate Plots**
+
+Common event definition:
 - For each bunch (0–7), compute  
   `max(lightyield[ch][b])`  
-  If this value ≥ 10, count **1 event** for that bunch.
-- Events are stored per day.
-- Event rate per day =  
-  ```
-  (# events) / (POT_recorded / 1e14)
-  ```
-- Output PDF:
-  ```
-  dataquality_withBSD/eventrate_plot/eventrate_plot.pdf
-  ```
+  If this value ≥ 10, that bunch is considered to have **one event**.
+
+Two types of daily event-rate histograms are produced:
+
+1. **Per-bunch counting (default)**
+   - Each bunch satisfying the condition counts as one event.
+   - A single spill can contribute up to 8 events (one per bunch).
+   - Events are accumulated per day.
+   - Event rate per day:
+     ```text
+     (# events) / (POT_recorded / 1e15)
+     ```
+   - Output PDF:
+     ```text
+     dataquality_withBSD/eventrate_plot/eventrate_plot.pdf
+     ```
+
+2. **Per-spill counting (max 1 event per spill)**
+   - If at least one bunch in a spill satisfies the condition, that spill
+     contributes 1 event (even if multiple bunches fired).
+   - Events are accumulated per day.
+   - Event rate per day:
+     ```text
+     (# events) / (POT_recorded / 1e15)
+     ```
+   - Output PDF:
+     ```text
+     dataquality_withBSD/eventrate_plot/eventrate_plot_spill.pdf
+     ```
+
+Both histograms are fitted with a constant function `y = p0`.  
+The fitted `χ²/ndf` and `p0 ± error` are shown in a statistics box in the
+top-right corner of each plot.
 
 ### 3. **JavaScript Summary Files**
 Automatically written to:
@@ -64,7 +88,7 @@ Tree name: **bsd**
 Used branches:
 - `spillnum`
 - `trg_sec[2]` (Unix time)
-- `good_spill_flag`
+- `good_spill_flag` (`spill_flag` for QSD)
 - `ct_np[4][0]` (POT)
 
 ### Lightyield Files
@@ -76,7 +100,7 @@ Tree name: **tree**
 Used branches:
 - `spillnum` (15-bit wrapping)
 - `unixtime[0]`
-- `lightyield[272][8]` (for neutrino-like events)
+- `lightyield[272][8]` (for event definition)
 
 Only stable & fully written files are processed.
 
@@ -94,7 +118,9 @@ Every lightyield event is matched to a BSD spill via:
    ```
    with minimal |Δt|
 4. POT from a BSD spill is counted **once per LY file**
-5. Neutrino events are counted per bunch (0–7)
+5. Events are counted per bunch (0–7) for the **per-bunch** rate.  
+   For the **per-spill** rate, a spill contributes 1 event if any acquired
+   bunch satisfies the event condition.
 
 ---
 
@@ -102,11 +128,14 @@ Every lightyield event is matched to a BSD spill via:
 
 The program maintains:
 
-- `processed_lightyield.tsv` – which LY files have been processed
-- `pot_points.tsv` – incremental POT accumulation
-- `neutrino_events.tsv` – timestamps of neutrino-like events
+- `pot_points.tsv` – POT increments (time, POT) for matched BSD spills,
+  used to build the accumulated POT curve and daily recorded POT.
+- `eventrate.tsv` – timestamps (Unix time) of events counted **per bunch**.
+- `eventrate_spill.tsv` – timestamps (Unix time) of events counted
+  **per spill** (max 1 event per spill).
 
-This allows fast repeated execution.
+These cache files are rebuilt from all available, stable lightyield files at
+each iteration, so repeated executions always reflect the full dataset.
 
 ---
 
@@ -116,7 +145,6 @@ This allows fast repeated execution.
 dataquality_withBSD/
   pot_plot/
     pot_points.tsv
-    processed_lightyield.tsv
     accumulated_pot_withBSD.pdf
 
   pot_info/
@@ -128,8 +156,10 @@ dataquality_withBSD/
     efficiency.js
 
   eventrate_plot/
-    neutrino_events.tsv
+    eventrate.tsv
+    eventrate_spill.tsv
     eventrate_plot.pdf
+    eventrate_plot_spill.pdf
 ```
 
 ---
@@ -140,7 +170,7 @@ Make sure ROOT is configured (`root-config` available).
 Compile with:
 
 ```bash
-g++ -O2 -std=c++17 dataqualityplot_withBSD.cpp -o dataqualityplot_withBSD     $(root-config --cflags --libs)
+g++ -O2 -std=c++17 dataqualityplot_withBSD.cpp -o dataqualityplot_withBSD $(root-config --cflags --libs)
 ```
 
 ---
