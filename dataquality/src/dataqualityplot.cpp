@@ -1,24 +1,4 @@
-// dataqualityplot.cpp
-// Purpose:
-//   Standalone C++ (compiled) program using ROOT to generate data-quality plots.
-//   It mirrors and extends the previous ROOT macro version.
-//
-// Major outputs (PDF):
-//   - Timing histograms (leading / trailing / leading_fromadc / trailing_fromadc) for latest run
-//   - Average lightyield per channel (>=10 p.e.) histogram for latest run
-//   - xg–yg 2D barycenter (latest run)
-//   - evnum vs unixtime (latest run)
-//   - evnum vs spillnum (latest run)
-//   - Average lightyield history 2D over all runs (6-hour bins) with incremental caching
-//
-// Build example:
-//   g++ -O2 -std=c++17 dataqualityplot.cpp -o dataqualityplot $(root-config --cflags --libs)
-//
-// Run examples:
-//   ./dataqualityplot                 // infinite loop, refresh 60s
-//   ./dataqualityplot -n 10          // 10 iterations
-//   ./dataqualityplot -n -1 -r 5000  // infinite loop, refresh every 5s
-
+//dataqualityplot.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
@@ -89,6 +69,7 @@ static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN;    // thresho
 static const std::string PATH_LY_PROC  = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/processed_files.tsv";
 static const std::string PATH_LY_BINS  = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/chavg_bins.tsv";
 static const Double_t BINW_SEC = FrostmonConfig::BINW_SEC;
+static const Int_t MIN_COUNTS_PER_BIN = FrostmonConfig::MIN_COUNTS_PER_BIN; // Minimum total number of ly>=10 p.e. entries per 6-hour bin to be shown
 
 // I/O paths
 static const std::string PATH_ROOT     = FrostmonConfig::OUTPUT_DIR + "/rootfile_aftercalib/";
@@ -916,12 +897,17 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
 
   long long npoints = 0;
   for (long long bin = bin_min; bin <= bin_max; ++bin) {
-    bool any_data = false;
+    long long total_cnt_in_bin = 0;
     for (int ch = 0; ch < NOUT; ++ch) {
       const auto it = bins.find(key_bin_ch(bin, ch));
-      if (it != bins.end() && it->second.cnt > 0) { any_data = true; break; }
+      if (it != bins.end()) {
+        total_cnt_in_bin += it->second.cnt;
+      }
     }
-    if (!any_data) continue;
+
+    // Skip bins where the total number of ly>=10 p.e. entries
+    // in this 6-hour window is too small (i.e. beam-off periods).
+    if (total_cnt_in_bin < MIN_COUNTS_PER_BIN) continue;
 
     const double t = static_cast<double>(bin) * BINW_SEC;
     for (int ch = 0; ch < NOUT; ++ch) {

@@ -1,30 +1,4 @@
-// convertlightyield.cpp
-// Standalone ROOT program to convert ADC integrals to light yield per channel/bunch.
-// It scans calibration CSVs under calibration/calibresult/ and, for each run name X:
-//   - requires rootfile/X.root to exist
-//   - skips if rootfile_aftercalib/X_lightyield.root already exists
-// Default: watch mode every 60 seconds (Ctrl-C to stop). Use --oneshot 1 for single scan.
-//
-// Build:
-//   g++ -std=c++17 -O2 convertlightyield.cpp -o convertlightyield \
-//       $(root-config --cflags --libs) -lSpectrum
-//   # On older GCC add: -lstdc++fs
-//
-// Run (watch mode default 60s):
-//   ./convertlightyield
-//
-// One-shot:
-//   ./convertlightyield --oneshot 1
-//
-// Options:
-//   -h, --help
-//   --base <DIR>        (default /group/nu/ninja/work/otani/FROST_beamdata/test)
-//   --chmap <FILE>      (default chmap_20251009.txt) under chmap/
-//   --refgain <FILE>    (default refgain.csv) under calibration/ReferenceGain/
-//   --watch <SEC>       (default 60; 0 disables watching)
-//   --oneshot <0|1>     (default 0)
-
-// ------- ROOT -------
+//convertlightyield.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TString.h>

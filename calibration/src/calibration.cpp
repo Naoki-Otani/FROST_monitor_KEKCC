@@ -1,26 +1,4 @@
-// calibration.cpp
-// Compile-time ROOT tool to batch-calibrate RAYRAW files.
-// - Scans rootfile/ for runNNNNN[_start_end].root
-// - Skips files that already have a CSV in calibration/calibresult/
-// - Processes from older to newer (run asc, segment asc, fallback to mtime)
-//
-// Build:
-//   g++ -std=c++17 -O2 calibration.cpp -o calibration $(root-config --cflags --libs)
-//   # If needed: add -lSpectrum
-//
-// Run (defaults match your environment):
-//   ./calibration
-//
-// Options:
-//   --base <DIR>   : base dir containing rootfile/, calibration/, chmap/
-//   --chmap <FILE> : chmap file name inside chmap/ (default: chmap_20251009.txt)
-//   --limit <N>    : process at most N files (0 = no limit)
-//   --dry-run <0|1>: list only, do not run calibration
-//
-// Notes:
-// - ROOT runs in batch mode (no GUI).
-// - Output CSV file determines "already processed" status.
-
+//calibration.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TH1D.h>

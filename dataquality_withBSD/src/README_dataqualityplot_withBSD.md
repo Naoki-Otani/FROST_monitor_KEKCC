@@ -89,7 +89,8 @@ Used branches:
 - `spillnum`
 - `trg_sec[2]` (Unix time)
 - `good_spill_flag` (`spill_flag` for QSD)
-- `ct_np[4][0]` (POT)
+- `ct_np[4][0]` (total POT over all 8 bunches)
+- `ct_np[4][1]`–`ct_np[4][8]` (POT for bunch 1–8)
 
 ### Lightyield Files
 Directory:
@@ -103,6 +104,33 @@ Used branches:
 - `lightyield[272][8]` (for event definition)
 
 Only stable & fully written files are processed.
+
+### Acquired Bunch Configuration
+
+The number of acquired bunches depends on the DAQ run.  
+This information is configured via:
+
+```text
+dataquality_withBSD/acquired_bunch/acquired_bunch_rules.txt
+```
+
+File format (whitespace-separated columns):
+
+```text
+# run_max  acquired_bunch
+5   1,2
+9999 0
+```
+
+- The first column `run_max` is an integer DAQ run number.
+- The second column `acquired_bunch` is:
+  - a comma-separated list of bunch indices (1–8), or
+  - `0`, meaning “all 8 bunches are acquired”.
+- Rules are applied in ascending order of `run_max`:
+  - A run with number `run` uses the **first** rule that satisfies `run <= run_max`.
+- The DAQ run number is extracted from the lightyield filename, e.g.  
+  `run00003_140000_149999_lightyield.root` → run = 3.
+- If `acquired_bunch_rules.txt` is missing, the program assumes that **all 8 bunches** are acquired for all runs.
 
 ---
 
@@ -122,6 +150,17 @@ Every lightyield event is matched to a BSD spill via:
    For the **per-spill** rate, a spill contributes 1 event if any acquired
    bunch satisfies the event condition.
 
+In addition, the run-dependent acquired-bunch configuration from
+`acquired_bunch_rules.txt` is applied as follows:
+
+- **Recorded POT** (red curve) and daily POT used for event-rate plots are computed
+  only from the acquired bunches of that run:
+  - if specific bunches are listed (e.g. `1,2`), their POT is summed using
+    `ct_np[4][b]` (b = 1–8),
+  - if `0` (all bunches) is specified, the total POT `ct_np[4][0]` is used.
+- **Event counting** (both per-bunch and per-spill) only considers bunches that
+  are marked as acquired for that run; non-acquired bunches are ignored when
+  scanning `lightyield[272][8]`.
 ---
 
 ## Incremental Processing

@@ -21,6 +21,8 @@ namespace FrostmonConfig {
     // Each line in this file defines a (run_max, sampling_first_bunch) pair.
     const std::string SAMPLING_FIRST_BUNCH_RULE_FILE = "sampling_first_bunch_rules.txt";
 
+    const std::string ACQUIRED_BUNCH_RULES_FILE = "acquired_bunch_rules.txt";
+
     const std::string REFGAIN_CSV = "ReferenceGain_fiberdif.csv";
     const std::string LIGHTYIELD_CORR_CSV = "lightyield_correctionfactor.csv";
 
@@ -104,7 +106,7 @@ namespace FrostmonConfig {
 
     // 6-hour binning for LY history
     static const Double_t BINW_SEC = 6.0 * 3600.0;
-
+    static const Int_t MIN_COUNTS_PER_BIN = 1000; // Minimum total number of ly>=10 p.e. entries per 6-hour bin to be shown
 // -----dataqualityplot_withBSD parameters -----
     static const Int_t SPILL_MOD = 32768;  // 2^15
     static const Int_t MAX_TIME_DIFF = 5;  // ±5 sec allowance between BSD and LY unixtime

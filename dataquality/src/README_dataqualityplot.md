@@ -63,9 +63,16 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
      - `processed_files.tsv` — remember processed files and their modification times.
      - `chavg_bins.tsv` — per-bin, per-channel `(sum, count)` accumulators.
    - Fill rule (per 6-hour bin):
-     - If **any channel** has data (count > 0), **fill all channels** in the bin.  
-       Channels with no data get `average = 0` (to monitor potential dead channels).  
-     - If **no channel** has data (all zero), **skip** that time-bin entirely.
+     - First, for each 6-hour bin, sum `count` over **all channels** for values `≥ 10 p.e.`  
+       (this corresponds to summing the `cnt` column in `chavg_bins.tsv` over all channels
+       at a given time bin).
+     - If this **total count** in the bin is **greater than or equal to** `MIN_COUNTS_PER_BIN`
+       (configured as `FrostmonConfig::MIN_COUNTS_PER_BIN` in the code), the bin is considered
+       to have sufficient beam activity and is **filled**.
+       For such bins, **all channels** are filled: channels with no data in that bin get
+       `average = 0` (to monitor potential dead channels).
+     - If the total count in a bin is **below** `MIN_COUNTS_PER_BIN`, that 6-hour bin is treated
+       as a beam-off / low-statistics period and is **skipped entirely** (no entries are filled).
      - The X-axis time range of this plot is currently restricted to **events with unix time ≥ 2025-11-29 18:00 (local time)**.
      This cut is applied only to the **display range**; all bins are still accumulated internally.
 
@@ -165,6 +172,11 @@ For the 6-hour binned lightyield history plot, the X-axis is additionally limite
 later than `2025-11-29 18:00` (local time) when drawing; this threshold is hard-coded
 via a call to `unixTimeLocal(2025, 11, 29, 18, 0, 0)` in the source code.
 
+- To suppress artificial drops in the average lightyield during beam-off or very
+  low-rate periods, each 6-hour bin is filled **only if** the total number of
+  `lightyield ≥ 10 p.e.` entries over all channels in that bin is at least
+  `MIN_COUNTS_PER_BIN`. This threshold is exposed as
+  `FrostmonConfig::MIN_COUNTS_PER_BIN` in the configuration.
 ---
 
 ## Notes & tips
@@ -173,6 +185,10 @@ via a call to `unixTimeLocal(2025, 11, 29, 18, 0, 0)` in the source code.
 - If you change directory paths, edit the `PATH_*` constants in the source code.
 - The visible time range of the 6-hour binned lightyield history plot can be changed by modifying the threshold passed to `unixTimeLocal(...)` inside `BuildAndSaveLyAvgHistory2D_Binned()`.
 - If labels overlap, consider increasing bottom margin or tweaking `SetNdivisions` and `SetLabelSize` on time axes.
+- Bins in the 6-hour binned lightyield history plot that do not reach
+  `MIN_COUNTS_PER_BIN` (i.e. too few `lightyield ≥ 10 p.e.` entries summed over
+  all channels) are left empty. This is intended to avoid misleading low
+  lightyield values during periods without beam.
 
 ---
 

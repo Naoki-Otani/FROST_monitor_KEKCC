@@ -1,3 +1,4 @@
+//dataqualityplot_withBSD.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
@@ -253,7 +254,7 @@ static void LoadAcquiredBunchRules(std::vector<AcquiredBunchRule>& rules)
 {
   rules.clear();
 
-  const std::string path = PATH_ACQUIRED_BUNCH_DIR + "acquired_bunch_rules.txt";
+  const std::string path = PATH_ACQUIRED_BUNCH_DIR + FrostmonConfig::ACQUIRED_BUNCH_RULES_FILE;
   std::ifstream fin(path);
   if (!fin) {
     ::Info("dataqualityplot_withBSD",
