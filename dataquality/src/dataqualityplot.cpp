@@ -295,7 +295,7 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
   std::unique_ptr<TH1D> h(new TH1D("h_chavg_ly", "Average lightyield per channel (>=10 p.e.);Lightyield [p.e.];Channels",
                                    NBINS_LYAVG, XMIN_LYAVG, XMAX_LYAVG));
   h->SetLineWidth(2);
-  h->SetStats(0);
+  h->SetStats(1);
   for (int ch = 0; ch < NOUT; ++ch) {
     const double avg = (cnt[ch] > 0) ? (sum[ch] / (double)cnt[ch]) : 0.0;
     h->Fill(avg);
@@ -305,6 +305,11 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
   TCanvas c("c_chavg_ly", "chavg ly", 1000, 700);
   c.SetGrid();
   h->SetMinimum(0.5);
+
+  gStyle->SetOptStat(1110);
+  gStyle->SetStatW(0.22);
+  gStyle->SetStatH(0.16);
+  gStyle->SetStatY(0.78);
   h->Draw("HIST");
 
   TDatime now;

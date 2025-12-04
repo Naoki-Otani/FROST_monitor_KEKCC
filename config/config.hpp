@@ -86,7 +86,7 @@ namespace FrostmonConfig {
     // Lightyield settings
     static const Int_t    NBINS_LYAVG = 50;
     static const Double_t XMIN_LYAVG  = 0.0;
-    static const Double_t XMAX_LYAVG  = 200.0;
+    static const Double_t XMAX_LYAVG  = 150.0;
 
     //Lightyield per channel histogram settings
     static const Int_t NBINS_LYCH = 100;
