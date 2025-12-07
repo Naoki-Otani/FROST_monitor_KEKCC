@@ -24,9 +24,8 @@ and per spill), and generates JavaScript summary files for a web dashboard.
 ### 2. **Event-Rate Plots**
 
 Common event definition:
-- For each bunch (0–7), compute  
-  `max(lightyield[ch][b])`  
-  If this value ≥ 10, that bunch is considered to have **one event**.
+- For each bunch (0–7), count the number of channels for which lightyield[ch][b] is ≥ 10 p.e.
+  If this count is at least 2, that bunch is considered to have **one event**.
 
 Two types of daily event-rate histograms are produced:
 

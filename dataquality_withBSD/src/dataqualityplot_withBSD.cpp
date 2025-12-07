@@ -1,4 +1,3 @@
-//dataqualityplot_withBSD.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
@@ -628,26 +627,29 @@ static void ProcessLightyieldFileForPOT(
     const BsdSpill& s = bsd_spills[best_idx];
 
     // Count "events" per bunch:
-    // For each bunch (0..7), take the maximum lightyield over all channels.
-    // If max(lightyield[ch][b]) >= threshold, that bunch contributes 1 event.
+    // A bunch is counted as an event only if at least two channels in that bunch
+    // have lightyield >= LIGHTMAX_MIN.
     // When only a subset of bunches is acquired in this run, we consider
     // only those bunches.
-    //
     // In addition, we also keep track of whether this spill had at least one
     // hit bunch, to build a "max 1 event per spill" event-rate plot.
     int  n_nu_events_this_spill   = 0;     // per-bunch counting
     bool has_nu_event_this_spill  = false; // per-spill flag
+    const int MIN_CHANNELS_OVER_THRESHOLD = 2; // require at least 2 channels above threshold
     if (acquired_bunch_mask == 0xFF) {
       // All 8 bunches acquired: use all bunch indices (0..7)
       for (int b = 0; b < 8; ++b) {
-        double ly_max_b = -1.0;
+        int n_channels_over = 0;
         for (int ch = 0; ch < 272; ++ch) {
           double v = lightyield_arr[ch][b];
-          if (std::isfinite(v) && v > ly_max_b) {
-            ly_max_b = v;
+          if (!std::isfinite(v)) continue;
+          if (v >= LIGHTMAX_MIN) {
+            ++n_channels_over;
+            // Early exit once we know this bunch passes the requirement
+            if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) break;
           }
         }
-        if (ly_max_b >= LIGHTMAX_MIN) {
+        if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) {
           ++n_nu_events_this_spill;
           has_nu_event_this_spill = true;
         }
@@ -656,14 +658,17 @@ static void ProcessLightyieldFileForPOT(
       // Only specific bunches acquired: consider only those bunch indices.
       for (int b = 0; b < 8; ++b) {
         if (!(acquired_bunch_mask & (1u << b))) continue;
-        double ly_max_b = -1.0;
+        int n_channels_over = 0;
         for (int ch = 0; ch < 272; ++ch) {
           double v = lightyield_arr[ch][b];
-          if (std::isfinite(v) && v > ly_max_b) {
-            ly_max_b = v;
+          if (!std::isfinite(v)) continue;
+          if (v >= LIGHTMAX_MIN) {
+            ++n_channels_over;
+            // Early exit once we know this bunch passes the requirement
+            if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) break;
           }
         }
-        if (ly_max_b >= LIGHTMAX_MIN) {
+        if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) {
           ++n_nu_events_this_spill;
           has_nu_event_this_spill = true;
         }
@@ -1055,6 +1060,11 @@ static void BuildAndSaveEventRatePlot()
   h.GetXaxis()->SetLabelSize(0.04);
   h.GetXaxis()->LabelsOption("v");  // vertical labels if many days
 
+  double ymax = h.GetMaximum();
+  double ymin = h.GetMinimum();
+  h.SetMinimum(ymin * 0.9);
+  h.SetMaximum(ymax * 1.1); // 20% margin at the top
+
   h.Draw("E1");  // error bars only (no filled boxes)
 
   // Constant fit: y = p0 over all bins with content.
@@ -1266,6 +1276,11 @@ static void BuildAndSaveEventRatePlotSpill()
 
   h.GetXaxis()->SetLabelSize(0.04);
   h.GetXaxis()->LabelsOption("v");  // vertical labels if many days
+
+  double ymax = h.GetMaximum();
+  double ymin = h.GetMinimum();
+  h.SetMinimum(ymin * 0.9);
+  h.SetMaximum(ymax * 1.1); // 20% margin at the top
 
   h.Draw("E1");  // error bars only (no filled boxes)
 
