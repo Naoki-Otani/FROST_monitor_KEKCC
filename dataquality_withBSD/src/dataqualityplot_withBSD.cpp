@@ -574,6 +574,7 @@ static void ProcessLightyieldFileForPOT(
   Int_t spillnum = 0;
   Double_t unixtime_arr[272];
   Double_t lightyield_arr[272][8];
+  Int_t cablenum_arr[272];  // channel mapping (Y: 1-140, X: 201-332)
 
   t->SetBranchStatus("spillnum",  1);
   t->SetBranchAddress("spillnum", &spillnum);
@@ -583,6 +584,12 @@ static void ProcessLightyieldFileForPOT(
 
   t->SetBranchStatus("lightyield", 1);
   t->SetBranchAddress("lightyield", lightyield_arr);
+
+  // cablenum gives the mapping of each channel:
+  //  - 1..140  : Y-plane
+  //  - 201..332: X-plane
+  t->SetBranchStatus("cablenum", 1);
+  t->SetBranchAddress("cablenum", cablenum_arr);
 
   const Long64_t nent = t->GetEntries();
 
@@ -627,29 +634,41 @@ static void ProcessLightyieldFileForPOT(
     const BsdSpill& s = bsd_spills[best_idx];
 
     // Count "events" per bunch:
-    // A bunch is counted as an event only if at least two channels in that bunch
-    // have lightyield >= LIGHTMAX_MIN.
+    // For each bunch, compute the maximum lightyield in the Y-plane and X-plane
+    // separately, using cablenum mapping:
+    //   Y-plane: cablenum in [1, 140]
+    //   X-plane: cablenum in [201, 332]
+    // A bunch is counted as one event if both maxima are >= LIGHTMAX_MIN.
     // When only a subset of bunches is acquired in this run, we consider
     // only those bunches.
     // In addition, we also keep track of whether this spill had at least one
     // hit bunch, to build a "max 1 event per spill" event-rate plot.
     int  n_nu_events_this_spill   = 0;     // per-bunch counting
     bool has_nu_event_this_spill  = false; // per-spill flag
-    const int MIN_CHANNELS_OVER_THRESHOLD = 2; // require at least 2 channels above threshold
+
     if (acquired_bunch_mask == 0xFF) {
       // All 8 bunches acquired: use all bunch indices (0..7)
       for (int b = 0; b < 8; ++b) {
-        int n_channels_over = 0;
+        double ly_max_y = -1.0; // max on Y-plane
+        double ly_max_x = -1.0; // max on X-plane
+
         for (int ch = 0; ch < 272; ++ch) {
-          double v = lightyield_arr[ch][b];
+          const int cable = cablenum_arr[ch];
+          const double v  = lightyield_arr[ch][b];
           if (!std::isfinite(v)) continue;
-          if (v >= LIGHTMAX_MIN) {
-            ++n_channels_over;
-            // Early exit once we know this bunch passes the requirement
-            if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) break;
+
+          // Y-plane: cablenum 1..140
+          if (cable >= 1 && cable <= 140) {
+            if (v > ly_max_y) ly_max_y = v;
+          }
+          // X-plane: cablenum 201..332
+          else if (cable >= 201 && cable <= 332) {
+            if (v > ly_max_x) ly_max_x = v;
           }
         }
-        if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) {
+
+        // Require both X and Y maxima above threshold
+        if (ly_max_x >= LIGHTMAX_MIN && ly_max_y >= LIGHTMAX_MIN) {
           ++n_nu_events_this_spill;
           has_nu_event_this_spill = true;
         }
@@ -658,17 +677,22 @@ static void ProcessLightyieldFileForPOT(
       // Only specific bunches acquired: consider only those bunch indices.
       for (int b = 0; b < 8; ++b) {
         if (!(acquired_bunch_mask & (1u << b))) continue;
-        int n_channels_over = 0;
+        double ly_max_y = -1.0; // max on Y-plane
+        double ly_max_x = -1.0; // max on X-plane
+
         for (int ch = 0; ch < 272; ++ch) {
-          double v = lightyield_arr[ch][b];
+          const int cable = cablenum_arr[ch];
+          const double v  = lightyield_arr[ch][b];
           if (!std::isfinite(v)) continue;
-          if (v >= LIGHTMAX_MIN) {
-            ++n_channels_over;
-            // Early exit once we know this bunch passes the requirement
-            if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) break;
+
+          if (cable >= 1 && cable <= 140) {
+            if (v > ly_max_y) ly_max_y = v;
+          } else if (cable >= 201 && cable <= 332) {
+            if (v > ly_max_x) ly_max_x = v;
           }
         }
-        if (n_channels_over >= MIN_CHANNELS_OVER_THRESHOLD) {
+
+        if (ly_max_x >= LIGHTMAX_MIN && ly_max_y >= LIGHTMAX_MIN) {
           ++n_nu_events_this_spill;
           has_nu_event_this_spill = true;
         }
