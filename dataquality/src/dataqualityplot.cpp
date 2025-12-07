@@ -1,4 +1,3 @@
-//dataqualityplot.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
@@ -253,9 +252,9 @@ static void DrawAndSaveTiming(TH1D* h, const std::string& runTag, const char* na
   TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText(Form("entries: %.0f", h->GetEntries()));
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText(Form("Entries: %.0f", h->GetEntries()));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
@@ -292,10 +291,10 @@ static void AccumulateLyAvgPerChannel(std::vector<double>& sum, std::vector<int>
 }
 
 static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vector<int>& cnt, const std::string& runTag) {
-  std::unique_ptr<TH1D> h(new TH1D("h_chavg_ly", "Average lightyield per channel (>=10 p.e.);Lightyield [p.e.];Channels",
+  std::unique_ptr<TH1D> h(new TH1D("h_chavg_ly", "Average light yield per channel (>=10 p.e.);Light yield [p.e.];Number of channels",
                                    NBINS_LYAVG, XMIN_LYAVG, XMAX_LYAVG));
   h->SetLineWidth(2);
-  h->SetStats(1);
+  // h->SetStats(1);
   for (int ch = 0; ch < NOUT; ++ch) {
     const double avg = (cnt[ch] > 0) ? (sum[ch] / (double)cnt[ch]) : 0.0;
     h->Fill(avg);
@@ -306,19 +305,21 @@ static void BuildAndSaveLyAvgHist(const std::vector<double>& sum, const std::vec
   c.SetGrid();
   h->SetMinimum(0.5);
 
-  gStyle->SetOptStat(1110);
-  gStyle->SetStatW(0.22);
-  gStyle->SetStatH(0.16);
-  gStyle->SetStatY(0.78);
+  // gStyle->SetOptStat(1110);
+  // gStyle->SetStatW(0.22);
+  // gStyle->SetStatH(0.16);
+  // gStyle->SetStatY(0.78);
   h->Draw("HIST");
 
   TDatime now;
-  TPaveText note(0.75, 0.80, 0.99, 0.9, "NDC");
+  TPaveText note(0.75, 0.72, 0.99, 0.9, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText("entries: 272");
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText("Entries: 272");
+  note.AddText(Form("Mean: %.2f", h->GetMean()));
+  note.AddText(Form("Std Dev: %.2f", h->GetStdDev()));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
@@ -424,10 +425,10 @@ static void BuildAndSaveLyEachChannel(const std::string& runTag,
 
           TString htitle;
           if (cable > 0) {
-            htitle = Form("RAYRAW#%d ch%02d (cable %03d);Lightyield [p.e.];Number of events",
+            htitle = Form("RAYRAW#%d ch%02d (cable %03d);Light yield [p.e.];Number of events",
                           p+1, lc, cable);
           } else {
-            htitle = Form("RAYRAW#%d ch%02d;Lightyield [p.e.];Number of events",
+            htitle = Form("RAYRAW#%d ch%02d;Light yield [p.e.];Number of events",
                           p+1, lc);
           }
 
@@ -476,7 +477,7 @@ static void BuildAndSaveLyEachChannel(const std::string& runTag,
 
   for (int p = 0; p < NPLANES; ++p) {
     TCanvas* c = new TCanvas(Form("c_rayraw%02d", p+1),
-                             Form("RAYRAW#%d lightyield", p+1),
+                             Form("RAYRAW#%d light yield", p+1),
                              2000, 1400);
     c->Divide(8, 4);
 
@@ -596,23 +597,230 @@ static void BuildAndSaveXY2D(const std::string& runTag, const std::vector<FileIn
   gStyle->SetOptStat(0);
   TCanvas c("c_xy", "xg-yg", 1000, 900);
   c.SetGrid();
+  c.SetTopMargin(0.15);
   hXY->SetContour(99);
   hXY->Draw("COLZ");
   hXY->GetYaxis()->SetTitleOffset(1.1);
 
   TDatime now;
-  TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
+  TPaveText note(0.7, 0.85, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText(Form("entries: %.0f", hXY->GetEntries()));
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText(Form("Entries: %.0f", hXY->GetEntries()));
+  note.AddText(Form("Mean x: %.2f, Std Dev x: %.2f", hXY->GetMean(1), hXY->GetStdDev(1)));
+  note.AddText(Form("Mean y: %.2f, Std Dev y: %.2f", hXY->GetMean(2), hXY->GetStdDev(2)));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
 
   TString outpdf = TString::Format("%s%s_xgyg.pdf", PATH_OUT_XY.c_str(), runTag.c_str());
   c.SaveAs(outpdf);
+}
+
+// ------------------------
+// LY profiles vs position (per run)
+// ------------------------
+
+static void BuildAndSaveLyVsPosition(
+    const std::string& runTag,
+    const std::vector<FileInfoLite>& stableFiles,
+    const std::vector<double>& sum,   // per-channel sum of ly (>=10 p.e.)
+    const std::vector<int>&    cnt)   // per-channel count of entries (>=10 p.e.)
+{
+  if (stableFiles.empty()) return;
+
+  // (1) Map channel index -> cablenum from one ROOT file of this run
+  std::vector<int> cab_of_ch(NOUT, -1);
+  {
+    TFile f(stableFiles.front().path.c_str(), "READ");
+    if (f.IsZombie()) return;
+    TTree* t = (TTree*)f.Get(TREE_NAME);
+    if (!t) { f.Close(); return; }
+
+    t->SetBranchStatus("*", 0);
+    if (!t->GetBranch("cablenum")) { f.Close(); return; }
+
+    Int_t cablenum_arr[NOUT];
+    t->SetBranchStatus("cablenum", 1);
+    t->SetBranchAddress("cablenum", cablenum_arr);
+
+    if (t->GetEntries() <= 0) { f.Close(); return; }
+
+    // Assume cablenum is fixed per channel and does not change with event
+    t->GetEntry(0);
+    for (int ch = 0; ch < NOUT; ++ch) {
+      cab_of_ch[ch] = cablenum_arr[ch];
+    }
+    f.Close();
+  }
+
+  // (2) Define position bins
+  const int    NX       = FrostmonConfig::XBINS_XY;
+  const double XMIN_POS = FrostmonConfig::XMIN_XY;
+  const double XMAX_POS = FrostmonConfig::XMAX_XY;
+  const int    NY       = FrostmonConfig::YBINS_XY;
+  const double YMIN_POS = FrostmonConfig::YMIN_XY;
+  const double YMAX_POS = FrostmonConfig::YMAX_XY;
+
+  // Average light yield vs position
+  std::unique_ptr<TH1D> hXavg(new TH1D(
+      "h_lyavg_xpos",
+      "Average light yield vs fiber position (x);Fiber position (x) [mm];Average light yield [p.e.]",
+      NX, XMIN_POS, XMAX_POS));
+
+  std::unique_ptr<TH1D> hYavg(new TH1D(
+      "h_lyavg_ypos",
+      "Average light yield vs fiber position (y);Fiber position (y) [mm];Average light yield [p.e.]",
+      NY, YMIN_POS, YMAX_POS));
+
+  // Number of entries with ly >= 10 p.e. vs position
+  // For example: if cablenum=1 has 80 entries with ly>=10 in this run,
+  // the corresponding bin height will be 80.
+  std::unique_ptr<TH1D> hXcount(new TH1D(
+      "h_nentries_over10_xpos",
+      "Number of events with light yield >= 10 p.e. vs fiber position (x);Fiber position (x) [mm];Number of events (light yeild >= 10 p.e.)",
+      NX, XMIN_POS, XMAX_POS));
+
+  std::unique_ptr<TH1D> hYcount(new TH1D(
+      "h_nentries_over10_ypos",
+      "Number of events with light yield >= 10 p.e. vs fiber position (y);Fiber position (y) [mm];Number of events (light yield >= 10 p.e.)",
+      NY, YMIN_POS, YMAX_POS));
+
+  hXavg->SetStats(0);
+  hYavg->SetStats(0);
+  hXcount->SetStats(0);
+  hYcount->SetStats(0);
+  hXavg->SetMinimum(0);
+  hYavg->SetMinimum(0);
+  hXcount->SetMinimum(0);
+  hYcount->SetMinimum(0);
+
+  // (3) Loop over channels and fill profiles
+  for (int ch = 0; ch < NOUT; ++ch) {
+    const int cab = cab_of_ch[ch];
+    if (cab <= 0) continue;
+
+    double x = std::numeric_limits<double>::quiet_NaN();
+    double y = std::numeric_limits<double>::quiet_NaN();
+    if (!CableToPosition(cab, x, y)) continue;
+
+    const int    nEntries = cnt[ch];  // number of entries with ly>=10 for this channel in this run
+    const double avg_ly   = (nEntries > 0)
+                            ? (sum[ch] / static_cast<double>(nEntries))
+                            : 0.0;
+
+    // X side (cablenum 201–332)
+    if (std::isfinite(x)) {
+      const int binx = hXavg->FindBin(x);
+
+      if (nEntries > 0 && avg_ly > 0.0) {
+        // Set the average light yield for this position.
+        // If multiple channels somehow map to the same x-bin,
+        // we average them.
+        const double prev_avg   = hXavg->GetBinContent(binx);
+        const double prev_nchan = hXcount->GetBinContent(binx); // reuse as a "channel counter" for averaging
+        if (prev_nchan <= 0.0) {
+          hXavg->SetBinContent(binx, avg_ly);
+        } else {
+          const double new_avg = (prev_avg * prev_nchan + avg_ly) / (prev_nchan + 1.0);
+          hXavg->SetBinContent(binx, new_avg);
+        }
+      }
+
+      // For the count histogram, the bin height is the total number of entries (ly>=10)
+      // for channels in this position.
+      if (nEntries > 0) {
+        hXcount->SetBinContent(binx, hXcount->GetBinContent(binx) + nEntries);
+      }
+    }
+
+    // Y side (cablenum 1–140)
+    if (std::isfinite(y)) {
+      const int biny = hYavg->FindBin(y);
+
+      if (nEntries > 0 && avg_ly > 0.0) {
+        const double prev_avg   = hYavg->GetBinContent(biny);
+        const double prev_nchan = hYcount->GetBinContent(biny); // reuse as a "channel counter" for averaging
+        if (prev_nchan <= 0.0) {
+          hYavg->SetBinContent(biny, avg_ly);
+        } else {
+          const double new_avg = (prev_avg * prev_nchan + avg_ly) / (prev_nchan + 1.0);
+          hYavg->SetBinContent(biny, new_avg);
+        }
+      }
+
+      if (nEntries > 0) {
+        hYcount->SetBinContent(biny, hYcount->GetBinContent(biny) + nEntries);
+      }
+    }
+  }
+
+  gSystem->mkdir(PATH_OUT_LY.c_str(), true);
+  gStyle->SetOptStat(0);
+
+  // (4) Canvas 1: average lightyield vs position (top: X, bottom: Y)
+  {
+    TCanvas c1(Form("c_ly_pos_avg_%s", runTag.c_str()),
+               "Average LY vs position", 1200, 900);
+    c1.Divide(1, 2);
+
+    TDatime now;
+
+    c1.cd(1);
+    gPad->SetGrid();
+    hXavg->Draw("HIST");
+
+    TPaveText note(0.8, 0.9, 0.99, 0.99, "NDC");
+    note.SetFillColor(0);
+    note.SetTextAlign(12);
+    note.AddText(Form("Run: %s", runTag.c_str()));
+    note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                      now.GetYear(), now.GetMonth(), now.GetDay(),
+                      now.GetHour(), now.GetMinute(), now.GetSecond()));
+    note.Draw();
+
+    c1.cd(2);
+    gPad->SetGrid();
+    hYavg->Draw("HIST");
+
+    TString outpdf = TString::Format(
+        "%s%s_chavg_lightyield_profile_xy.pdf",
+        PATH_OUT_LY.c_str(), runTag.c_str());
+    c1.SaveAs(outpdf);
+  }
+
+  // (5) Canvas 2: number of entries (ly>=10) vs position (top: X, bottom: Y)
+  {
+    TCanvas c2(Form("c_ly_pos_nentries_%s", runTag.c_str()),
+               "Entries with LY >= 10 p.e. vs position", 1200, 900);
+    c2.Divide(1, 2);
+
+    TDatime now;
+
+    c2.cd(1);
+    gPad->SetGrid();
+    hXcount->Draw("HIST");
+
+    TPaveText note(0.8, 0.9, 0.99, 0.99, "NDC");
+    note.SetFillColor(0);
+    note.SetTextAlign(12);
+    note.AddText(Form("Run: %s", runTag.c_str()));
+    note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                      now.GetYear(), now.GetMonth(), now.GetDay(),
+                      now.GetHour(), now.GetMinute(), now.GetSecond()));
+    note.Draw();
+
+    c2.cd(2);
+    gPad->SetGrid();
+    hYcount->Draw("HIST");
+
+    TString outpdf = TString::Format(
+        "%s%s_nevents_over10_profile_xy.pdf",
+        PATH_OUT_LY.c_str(), runTag.c_str());
+    c2.SaveAs(outpdf);
+  }
 }
 
 // ------------------------
@@ -666,8 +874,8 @@ static void BuildAndSaveEvTime(const std::string& runTag, const std::vector<File
   TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
@@ -730,8 +938,8 @@ static void BuildAndSaveSpillnum(const std::string& runTag, const std::vector<Fi
   TPaveText note(0.7, 0.9, 0.95, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText(Form("run: %s", runTag.c_str()));
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
@@ -889,7 +1097,7 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
 
   std::unique_ptr<TH2D> h(new TH2D(
       "h_lyavg_hist2d",
-      "Average lightyield history;time;Average lightyield per channel (>=10 p.e.) [p.e.]",
+      "Average light yield history;time;Average light yield per channel (>=10 p.e.) [p.e.]",
       nbx, tmin, tmax,
       NBINS_LYAVG, XMIN_LYAVG, XMAX_LYAVG));
 
@@ -951,9 +1159,9 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
   note.SetFillColor(0);
   note.SetTextAlign(12);
-  note.AddText("run: ALL (6h bins)");
-  note.AddText(Form("entries: %lld", npoints));
-  note.AddText(Form("updated: %04d-%02d-%02d %02d:%02d:%02d",
+  note.AddText("Run: ALL (6h bins)");
+  note.AddText(Form("Entries: %lld", npoints));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
                     now.GetYear(), now.GetMonth(), now.GetDay(),
                     now.GetHour(), now.GetMinute(), now.GetSecond()));
   note.Draw();
@@ -984,6 +1192,12 @@ static bool RunPdfsExist(const std::string& runTag)
 
   // Average lightyield per channel
   if (!fileExists(PATH_OUT_LY + runTag + "_chavg_lightyield_hist.pdf")) return false;
+
+  // Average lightyield vs position (X/Y)
+  if (!fileExists(PATH_OUT_LY + runTag + "_chavg_lightyield_profile_xy.pdf")) return false;
+
+  // Number of eventss (ly>=10 p.e.) vs position (X/Y)
+  if (!fileExists(PATH_OUT_LY + runTag + "_nevents_over10_profile_xy.pdf")) return false;
 
   // xg–yg 2D
   if (!fileExists(PATH_OUT_XY + runTag + "_xgyg.pdf")) return false;
@@ -1054,6 +1268,9 @@ static void MakeRunPdfs(const std::string& runTag,
     AccumulateLyAvgPerChannel(sum, cnt, fi.path);
   }
   BuildAndSaveLyAvgHist(sum, cnt, runTag);
+
+  // LY profiles vs position (average LY and #events with ly>=10 p.e.)
+  BuildAndSaveLyVsPosition(runTag, stableFiles, sum, cnt);
 
   // Per-channel lightyield histograms (RAYRAW planes)
   BuildAndSaveLyEachChannel(runTag, stableFiles);
