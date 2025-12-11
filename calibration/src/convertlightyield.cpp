@@ -53,6 +53,7 @@ static const Int_t SPILL_BIT_MIN_POINTS    = FrostmonConfig::SPILL_BIT_MIN_POINT
 static const Double_t PILEUP_THRESHOLD = FrostmonConfig::PILEUP_THRESHOLD;
 static const Int_t UNDERSHOOT_ADC_THRESHOLD = FrostmonConfig::UNDERSHOOT_ADC_THRESHOLD;
 static const Int_t UNDERSHOOT_MIN_POINTS    = FrostmonConfig::UNDERSHOOT_MIN_POINTS;
+static const Int_t UNDERSHOOT_MIN_ADC       = FrostmonConfig::UNDERSHOOT_MIN_ADC;
 
 static const double ADC_MIN = FrostmonConfig::ADC_MIN; // threshold for baseline and integration
 
@@ -391,6 +392,14 @@ static std::vector<bool> make_undershoot_mask(const std::vector<double>& wf,
   first_idx_out = -1;  // default: no undershoot
   if (ns <= 0) return mask;
 
+  const int start_idx_for_min = 1;
+
+  auto it_min = std::min_element(wf.begin() + start_idx_for_min, wf.end());
+
+  if (*it_min > (double)UNDERSHOOT_MIN_ADC) {
+    return mask;
+  }
+
   const double THR = (double)UNDERSHOOT_ADC_THRESHOLD;
   const int RUN   = UNDERSHOOT_MIN_POINTS;
 
@@ -596,8 +605,11 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   int out_spillnum;
   int out_pileup_flag[NOUT];
   int out_undershoot_flag[NOUT];
+  double out_baseline[NOUT];
   // hit_bunch is stored as vector<vector<double>> to use ROOT's existing STL dictionary
   auto   out_hit_bunch = new std::vector<std::vector<double>>();
+  auto   out_undershoot_bunch = new std::vector<std::vector<double>>();
+  auto   out_overlapped_bunch = new std::vector<std::vector<double>>();
   auto   out_leading  = new std::vector<std::vector<double>>();
   auto   out_trailing = new std::vector<std::vector<double>>();
   auto   out_leading_fromadc  = new std::vector<std::vector<double>>();
@@ -612,7 +624,10 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   tout.Branch("spillnum", &out_spillnum,  "spillnum/I");
   tout.Branch("pileup_flag", out_pileup_flag, Form("pileup_flag[%d]/I", NOUT));
   tout.Branch("undershoot_flag", out_undershoot_flag, Form("undershoot_flag[%d]/I", NOUT));
+  tout.Branch("baseline", out_baseline, Form("baseline[%d]/D", NOUT));
   tout.Branch("hit_bunch",  &out_hit_bunch);
+  tout.Branch("undershoot_bunch", &out_undershoot_bunch);
+  tout.Branch("overlapped_bunch", &out_overlapped_bunch);
   tout.Branch("leading",  &out_leading);
   tout.Branch("trailing", &out_trailing);
   tout.Branch("leading_fromadc",  &out_leading_fromadc);
@@ -634,10 +649,12 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   for (Long64_t ie = 0; ie < nent; ++ie) {
     tin->GetEntry(ie);
 
+    out_hit_bunch->assign(NOUT, std::vector<double>());
+    out_undershoot_bunch->assign(NOUT, std::vector<double>());
+    out_overlapped_bunch->assign(NOUT, std::vector<double>());
     out_leading->assign(NOUT, std::vector<double>());
     out_trailing->assign(NOUT, std::vector<double>());
     out_leading_fromadc->assign(NOUT, std::vector<double>());
-    out_hit_bunch->assign(NOUT, std::vector<double>());
     out_trailing_fromadc->assign(NOUT, std::vector<double>());
 
     for (int i = 0; i < NOUT; ++i) {
@@ -646,6 +663,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
       out_unixtime[i] = unixtime;
       out_pileup_flag[i] = 0;
       out_undershoot_flag[i] = 0;
+      out_baseline[i] = std::numeric_limits<double>::quiet_NaN();
       for(int bunch=0; bunch<NBUNCH; ++bunch){
         out_lightyield[i][bunch] = std::numeric_limits<double>::quiet_NaN();
       }
@@ -681,6 +699,8 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
         if (idx < 0 || idx >= NOUT) continue;
 
         double adcint[NBUNCH] = {0.0};
+        bool force_zero_lightyield[NBUNCH] = {false};
+
         const auto& wf = waveform->at(ch);
         const int ns = (int)wf.size();
 
@@ -741,7 +761,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
           if (hit_b[b]) hit_vec.push_back(static_cast<double>(b));
         }
 
-          if (ns > sampling_first_bunch) {
+        if (ns > sampling_first_bunch) {
           // Build undershoot mask and estimate baseline excluding undershoot region.
           int undershoot_first = -1;
           auto undershoot_mask = make_undershoot_mask(wf, undershoot_first);
@@ -756,6 +776,8 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
           }
 
           const double bl = estimate_baseline_masked(wf, undershoot_mask);
+
+          out_baseline[idx] = bl;
 
           // Precompute integer start sample for each bunch
           int start_sample[NBUNCH];
@@ -897,10 +919,9 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
             if (!overlapped[bb]) continue;
 
             if (donors.empty()) {
-              // No donor available: fall back to integrating over INT_RANGE.
-              int jmin = start_sample[bb];
-              int jmax = jmin + INT_RANGE;
-              adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+              // No donor available: lightyield=0
+              adcint[bb] = 0.0;
+              force_zero_lightyield[bb] = true;
             } else {
               int best_d   = donors[0];
               int best_dist = std::abs(bb - donors[0]);
@@ -912,6 +933,18 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                 }
               }
               adcint[bb] = adcint[best_d];
+            }
+          }
+
+          auto &vec_undershoot = (*out_undershoot_bunch)[idx];
+          auto &vec_overlapped = (*out_overlapped_bunch)[idx];
+
+          for (int bb = 0; bb < NBUNCH; ++bb) {
+            if (undershoot_bunch[bb]) {
+              vec_undershoot.push_back(static_cast<double>(bb));
+            }
+            if (overlapped[bb]) {
+              vec_overlapped.push_back(static_cast<double>(bb));
             }
           }
         }
@@ -951,7 +984,14 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
             (adcint[bunch] - zero_pe * (double)(INT_RANGE)/(double)intrange_calib)
             * (m1_ref_base - m0_ref_base)
             / ((one_pe_base - zero_pe_base) * (m1_ref - m0_ref));
-          out_lightyield[idx][bunch] = ly_raw * corr_factor;
+
+            double ly = ly_raw * corr_factor;
+
+            if (force_zero_lightyield[bunch]) {
+              ly = 0.0;
+            }
+
+            out_lightyield[idx][bunch] = ly;
         }
 
         // copy existing leading/trailing if available

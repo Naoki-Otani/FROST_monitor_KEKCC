@@ -240,7 +240,7 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
 
 ## Directory Layout (defaults)
 
-```
+```text
 /group/nu/ninja/work/otani/FROST_beamdata/e71c/
   ├── rootfile/                      # input ROOT (e.g., run00097_0_9999.root)
   ├── rootfile_aftercalib/           # output ROOT (e.g., run00097_0_9999_lightyield.root)
@@ -248,7 +248,7 @@ converts any runs that have a calibration CSV but **do not yet have a converted 
   │   ├── chmap_20251122.txt         # default RAYRAW chmap (example)
   │   ├── chmap_spillnum20251111.txt # spillnum bit → (RAYRAW, ch) map (default)
   │   ├── chmap_rules.txt            # optional per-run RAYRAW chmap rules
-  │   └── chmap_spillnum_rules.txt       # optional per-run spillnum chmap rules
+  │   └── chmap_spillnum_rules.txt   # optional per-run spillnum chmap rules
   └── calibration/
       ├── calibresult/               # input CSV (e.g., calib_run00097_0_9999.csv)
       ├── lightyield_correctionfactor/
@@ -319,7 +319,7 @@ Customize paths and files:
 
 The tool scans `calibration/calibresult/` for files named:
 
-```
+```text
 calib_<RUNNAME>.csv
 ```
 
@@ -331,20 +331,22 @@ A run `<RUNNAME>` is **eligible for conversion** only if **all** of the followin
    → If too small or recently updated, it is assumed incomplete and skipped.
 
 2. **The corresponding input ROOT exists**  
-   ```
+   ```text
    rootfile/<RUNNAME>.root
    ```
 
 3. **The output (light-yield) ROOT does NOT already exist**  
-   ```
+   ```text
    rootfile_aftercalib/<RUNNAME>_lightyield.root
    ```
 
 If a CSV is not ready, the program reports something like:
 
-```
+```text
 [SKIP] CSV not ready (too small or recently updated): calib_run00097_0_9999.csv (size=512 bytes)
 ```
+
+---
 
 ## Per-run configuration (chmap, spillchmap, sampling start index)
 
@@ -418,17 +420,38 @@ For each run `<RUNNAME>`:
   `rootfile_aftercalib/<RUNNAME>_lightyield.root`
 
 - Output TTree (named `tree`) with branches:  
-  - `cablenum[272]/I`, `rayraw[272]/I`, `rayrawch[272]/I`  
-  - `lightyield[272][8]/D`, `unixtime[272]/D`  
-  - `spillnum/I`
-  - `pileup_flag[272]/I`           (per-channel pile-up flag)  
-  - `undershoot_flag[272]/I`       (per-channel undershoot / long-tail flag)  
-  - `hit_bunch`                    (vector<vector<double>>; bunch indices with ADC hits)  
-  - `leading`, `trailing`          (vector<vector<double>>)  
-  - `leading_fromadc`, `trailing_fromadc` (computed from ADC threshold crossings)
+
+  - Per-channel geometry / timing:
+    - `cablenum[272]/I`
+    - `rayraw[272]/I`
+    - `rayrawch[272]/I`
+    - `unixtime[272]/D`
+
+  - Light yield and calibration:
+    - `lightyield[272][8]/D`  
+      (per channel, per bunch light yield after calibration and correction)
+    - `baseline[272]/D`  
+      (per-channel DC baseline used for integration, after undershoot masking)
+
+  - Spillnum and quality flags:
+    - `spillnum/I`
+    - `pileup_flag[272]/I`           (per-channel pile-up flag)  
+    - `undershoot_flag[272]/I`       (per-channel undershoot / long-tail flag)  
+
+  - Bunch-level structure (stored as `vector<vector<double>>`,
+    outer index = cable index, inner values = bunch indices):
+    - `hit_bunch`             – bunch indices with ADC hits in that channel  
+    - `undershoot_bunch`      – bunch indices whose integration window overlaps an undershoot region  
+    - `overlapped_bunch`      – bunch indices whose integration window significantly overlaps a neighboring hit or undershoot  
+
+  - Timing information from ADC and existing branches:
+    - `leading`, `trailing`                      (copied from input, if present)  
+    - `leading_fromadc`, `trailing_fromadc`      (computed from ADC threshold crossings)
 
 The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute **raw** per-channel light yield,
 which is then multiplied by a **per-cable correction factor** from `lightyield_correctionfactor.csv`.
+
+---
 
 ### Light-yield correction factor
 
@@ -450,10 +473,13 @@ For each `cablenum`:
     \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
   \]
 
+---
+
 ### Spillnum reconstruction
+
 The file specified by `--spillchmap` contains:
 
-```
+```text
 #bit RAYRAW ch
 1 12 9
 2 12 10
@@ -464,7 +490,7 @@ The file specified by `--spillchmap` contains:
 For each listed `(RAYRAW, ch)`:
 
 - Look at the waveform of that channel  
-- If **≥ 5 samples ≥ 600 ADC**, the bit is **1**  
+- If **≥ 5 samples ≥ `SPILL_BIT_ADC_THRESHOLD`** (e.g. 600 ADC), the bit is **1**  
 - Otherwise, bit is **0**
 
 Bits are interpreted as:
@@ -478,6 +504,7 @@ All bits are combined into an integer and stored in `spillnum`.
 Which `(RAYRAW, ch)` channels are used for each spill bit is defined by the
 spill chmap selected for that run (either from `--spillchmap` or `chmap_spillnum_rules.txt`).
 
+---
 
 ### Bunch integration, pile-up and undershoot handling
 
@@ -516,54 +543,105 @@ The converter therefore performs
     `[start(b), start(b+1))`, reducing double-counting of the same physical pulse
     across several bunches.
 
-In addition, long undershoot / saturation tails are handled via an
-**undershoot mask**:
+---
 
-- An undershoot region is detected once the waveform remains below
-  `UNDERSHOOT_ADC_THRESHOLD` for at least `UNDERSHOOT_MIN_POINTS` consecutive
-  samples with a non-increasing trend.
-- All samples from the first such point to the end of the waveform are marked as
-  “undershoot”. If any undershoot is found, the channel-level
-  `undershoot_flag` is set to `1`.
-- The DC baseline is estimated using sliding windows that **exclude** masked
-  (undershoot) samples, so the baseline is not biased by long negative tails.
+### Undershoot detection, masking, and baseline
 
-Because `INT_RANGE > BUNCH_INTERVAL`, some nominal bunch windows would still
-overlap hit regions or undershoot regions in neighboring bunches. To avoid this:
+Long undershoot / saturation tails are handled via an
+**undershoot mask** and additional safeguards:
+
+1. **Global minimum requirement**
+
+   - First, the waveform’s global minimum (excluding the very first sample, which is
+     known to be potentially corrupted by DAQ artefacts) is evaluated.
+   - If this minimum is **greater than `UNDERSHOOT_MIN_ADC`** (e.g. 450 ADC),
+     the channel is considered **free of large undershoot**, and no undershoot
+     mask is applied.
+
+2. **Run-based undershoot onset**
+
+   If the global minimum is sufficiently low, an undershoot region is detected once:
+
+   - The waveform remains at or below `UNDERSHOOT_ADC_THRESHOLD`
+     (e.g. 500 ADC counts)
+   - for at least `UNDERSHOOT_MIN_POINTS` consecutive samples
+   - with a non-increasing trend within that run.
+
+   All samples from the first such point to the end of the waveform are marked as
+   “undershoot”. If any undershoot is found, the channel-level
+   `undershoot_flag` is set to `1`.
+
+3. **Baseline estimation with undershoot masking**
+
+   - The DC baseline is estimated using sliding windows over the waveform.
+   - Any samples marked as “undershoot” are excluded from the average, as are all
+     samples with ADC values at or below `ADC_MIN`.
+   - The resulting per-channel baseline (after masking) is stored in the
+     `baseline[272]` branch and is used for all subsequent integrations.
+
+---
+
+### Overlap handling, donors, and special cases
+
+Because `INT_RANGE > BUNCH_INTERVAL`, some nominal bunch windows inevitably
+overlap hit regions or undershoot regions in neighboring bunches. To handle this:
 
 - Bunches **without hits** and **without such overlap** are integrated normally
   over `INT_RANGE`. These bunches act as **donors** providing a clean
   “dark-noise only” integral.
-- Bunches whose integration window would significantly overlap a neighboring hit
-  or undershoot (“overlapped” bunches) do **not** get an independent integral.
-  Instead, they reuse the integral from the nearest donor bunch.
-- For the **first undershoot-affected bunch that also has a hit**, the integral
-  is computed only up to the start of the undershoot region; this bunch is not
-  replaced by a donor value.
+- Bunches whose integration window significantly overlaps a neighboring hit
+  or undershoot are marked as **overlapped**:
+  - These bunch indices are recorded in `overlapped_bunch`.
+  - For overlapped bunches **with at least one donor available**, the ADC integral
+    is **reused** from the nearest donor bunch (in bunch index).
+  - For overlapped bunches **with no donors available** (e.g. all bunches are
+    hit or affected), the ADC integral is not trusted; instead, the corresponding
+    **light yield is explicitly forced to 0.0** via an internal flag.  
+    This prevents unphysical large light-yield values from being assigned to
+    heavily contaminated or poorly constrained bunches.
+
+- For the **first undershoot-affected bunch that also has a hit**, a special
+  rule applies:
+  - Its integral is computed only up to the start of the undershoot region.
+  - This bunch is not overwritten by a donor value.
+  - The bunch index is recorded in both `hit_bunch` and `undershoot_bunch`.
 
 As a result:
 
 - Hit bunches integrate around the true pulse with reduced cross-talk to
   neighboring bunches and with explicit pile-up tagging (`pileup_flag`).
-- Non-hit bunches still carry a realistic dark-noise integral (rather than
-  exactly zero), enabling studies of 1–3 p.e.-level dark noise even in the
-  presence of neighboring bunch activity and long tails.
+- Non-hit, non-overlapped bunches still carry a realistic dark-noise integral
+  (rather than exactly zero).
+- Bunches identified as severely overlapped but lacking a clean donor are
+  clearly signaled by a **light yield equal to 0.0** (and listed in
+  `overlapped_bunch`), making them easy to exclude or treat specially in
+  downstream analysis.
+
+---
 
 ### Relevant configuration parameters
 
 The following constants are defined in `config.hpp` and control the behavior
 described above:
 
-- `ADC_MIN`: ADC threshold below which samples are ignored in both baseline
+- `ADC_MIN`  
+  ADC threshold below which samples are ignored in both baseline
   estimation and waveform integration (used consistently in calibration and
   light-yield conversion).
-- `PILEUP_THRESHOLD` (default: `10.0` ADC counts): minimum excess of the maximum
-  amplitude in the next-bunch region above the boundary sample to classify the
-  next bunch as having a pile-up hit.
-- `UNDERSHOOT_ADC_THRESHOLD` (default: `500` ADC counts) and
-  `UNDERSHOOT_MIN_POINTS` (default: `8` samples): conditions used to detect the
-  onset of a long undershoot region that should be masked from baseline
-  estimation and integration.
+
+- `PILEUP_THRESHOLD` (default: `10.0` ADC counts)  
+  Minimum excess of the maximum amplitude in the next-bunch region above the
+  boundary sample to classify the next bunch as having a pile-up hit.
+
+- `UNDERSHOOT_ADC_THRESHOLD` (default: `500` ADC counts) and  
+  `UNDERSHOOT_MIN_POINTS` (default: `8` samples)  
+  Conditions used to detect the onset of a long undershoot region that should
+  be masked from baseline estimation and integration.
+
+- `UNDERSHOOT_MIN_ADC` (e.g. `450` ADC counts)  
+  Global-minimum safeguard: if the waveform’s minimum (excluding the very first
+  sample) is above this value, the entire waveform is treated as **undershoot-free**
+  and no undershoot mask is applied.
 
 ---
 

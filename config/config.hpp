@@ -72,6 +72,7 @@ namespace FrostmonConfig {
 
     static constexpr int UNDERSHOOT_ADC_THRESHOLD = 500;
     static constexpr int UNDERSHOOT_MIN_POINTS    = 8;
+    static const int UNDERSHOOT_MIN_ADC = 450;
 
 // ----- dataqualityplot parameters -----
     // Timing hist settings
