@@ -880,6 +880,7 @@ static void BuildAndSaveAccumulatedPotPlot(
     ax->SetLabelSize(0.03);
     ax->SetLabelOffset(0.02);
     ax->SetTitleOffset(1.3);
+    ax->SetNdivisions(520);
 
     gr_del->Draw("AL");
   }
@@ -895,6 +896,7 @@ static void BuildAndSaveAccumulatedPotPlot(
       ax->SetLabelSize(0.03);
       ax->SetLabelOffset(0.02);
       ax->SetTitleOffset(1.3);
+      ax->SetNdivisions(520);
       gr_rec->Draw("AL");
     } else {
       gr_rec->Draw("L SAME");
