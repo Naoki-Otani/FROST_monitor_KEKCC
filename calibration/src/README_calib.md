@@ -470,7 +470,7 @@ For each `cablenum`:
 - Then, the stored `lightyield` is:
 
   $$
-    \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
+  \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
   $$
 
 ---
