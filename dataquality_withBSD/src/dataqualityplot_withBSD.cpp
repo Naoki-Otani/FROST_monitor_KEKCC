@@ -53,6 +53,11 @@ static const std::string PATH_POT_PLOT =
 static const std::string PATH_POT_INFO =
   PATH_OUT_BASE + "pot_info/";
 
+static const std::string PATH_POT_10MIN_CSV =
+  PATH_POT_INFO + "pot_spill_10min.csv";
+static const std::string PATH_MISSED_SPILLS_CSV =
+  PATH_POT_INFO + "missed_spills.csv";
+
 static const std::string PATH_POT_POINTS =
   PATH_POT_PLOT+ "pot_points.tsv";
 static const std::string PATH_POT_PROC   =
@@ -201,6 +206,25 @@ static std::string FormatDateYMD(std::time_t t)
   oss << (lt.tm_year + 1900) << "/";
   oss << std::setw(2) << std::setfill('0') << (lt.tm_mon + 1) << "/";
   oss << std::setw(2) << std::setfill('0') << lt.tm_mday;
+  return oss.str();
+}
+
+// Convert Unix time → "YYYY/MM/DD/H:MM" (hour is not zero-padded)
+static std::string FormatDateTimeYMDHM(std::time_t t)
+{
+  std::tm lt{};
+#if defined(_WIN32)
+  localtime_s(&lt, &t);
+#else
+  lt = *std::localtime(&t);
+#endif
+
+  std::ostringstream oss;
+  oss << (lt.tm_year + 1900) << "/";
+  oss << std::setw(2) << std::setfill('0') << (lt.tm_mon + 1) << "/";
+  oss << std::setw(2) << std::setfill('0') << lt.tm_mday << "/";
+  oss << (lt.tm_hour) << ":";
+  oss << std::setw(2) << std::setfill('0') << lt.tm_min;
   return oss.str();
 }
 
@@ -553,7 +577,8 @@ static void ProcessLightyieldFileForPOT(
     std::vector<std::pair<double,double>>& out_new_points,
     std::vector<double>& out_new_nu_times,
     std::vector<double>& out_new_nu_times_spill,
-    const std::vector<AcquiredBunchRule>& acq_rules)
+    const std::vector<AcquiredBunchRule>& acq_rules,
+    std::unordered_set<size_t>* out_matched_bsd_indices)
 {
   TFile f(path.c_str(), "READ");
   if (f.IsZombie()) {
@@ -729,6 +754,10 @@ static void ProcessLightyieldFileForPOT(
     if (used_bsd_indices.insert(best_idx).second) {
       out_new_points.emplace_back(static_cast<double>(s.trg_sec), pot_increment);
       ++match_count;
+
+      if (out_matched_bsd_indices) {
+        out_matched_bsd_indices->insert(best_idx);
+      }
     }
   }
 
@@ -922,6 +951,145 @@ static void BuildAndSaveAccumulatedPotPlot(
 
   delete gr_del;
   delete gr_rec;
+}
+
+static void BuildAndSavePotSpillCsv10Min(const std::vector<BsdSpill>& bsd_spills)
+{
+  // Recorded points (time, pot_increment) from pot_points.tsv
+  std::vector<std::pair<int,double>> rec_points; // (trg_sec, pot_inc)
+  {
+    std::ifstream fin(PATH_POT_POINTS);
+    if (fin) {
+      std::string line;
+      while (std::getline(fin, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream iss(line);
+        double t=0.0, p=0.0;
+        if (!(iss >> t >> p)) continue;
+        if (!std::isfinite(t) || !std::isfinite(p)) continue;
+        rec_points.emplace_back((int)std::llround(t), p);
+      }
+    }
+  }
+  std::sort(rec_points.begin(), rec_points.end(),
+            [](const auto& a, const auto& b){ return a.first < b.first; });
+
+  // Delivered spills from BSD (time, pot_inc=pot)
+  std::vector<BsdSpill> bsd_sorted = bsd_spills;
+  std::sort(bsd_sorted.begin(), bsd_sorted.end(),
+            [](const BsdSpill& a, const BsdSpill& b){ return a.trg_sec < b.trg_sec; });
+
+  if (bsd_sorted.empty() && rec_points.empty()) {
+    ::Warning("dataqualityplot_withBSD",
+              "No delivered nor recorded data: skip 10-min CSV.");
+    return;
+  }
+
+  // Determine time range
+  const int BIN_SEC = 600; // 10 min
+  int t_min = std::numeric_limits<int>::max();
+  int t_max = 0;
+
+  if (!bsd_sorted.empty()) {
+    t_min = std::min(t_min, bsd_sorted.front().trg_sec);
+    t_max = std::max(t_max, bsd_sorted.back().trg_sec);
+  }
+  if (!rec_points.empty()) {
+    t_min = std::min(t_min, rec_points.front().first);
+    t_max = std::max(t_max, rec_points.back().first);
+  }
+
+  // Align to 10-min boundaries
+  int t0 = (t_min / BIN_SEC) * BIN_SEC;                 // floor
+  int t1 = ((t_max + BIN_SEC - 1) / BIN_SEC) * BIN_SEC; // ceil
+
+  gSystem->mkdir(PATH_POT_INFO.c_str(), true);
+
+  std::ofstream fout(PATH_POT_10MIN_CSV, std::ios::trunc);
+  if (!fout) {
+    ::Warning("dataqualityplot_withBSD",
+              "Failed to open 10-min CSV: %s", PATH_POT_10MIN_CSV.c_str());
+    return;
+  }
+
+  fout << "#time, delivered spill, recorded spill, delivered POT, recorded POT, efficiency[%]\n";
+  fout << std::setprecision(16);
+
+  // Sweep with two pointers (linear, fast)
+  size_t i_del = 0, i_rec = 0;
+  long long delivered_spill = 0;
+  long long recorded_spill  = 0;
+  double delivered_pot = 0.0;
+  double recorded_pot  = 0.0;
+
+  for (int t = t0; t <= t1; t += BIN_SEC) {
+    while (i_del < bsd_sorted.size() && bsd_sorted[i_del].trg_sec <= t) {
+      delivered_spill++;
+      delivered_pot += bsd_sorted[i_del].pot;
+      ++i_del;
+    }
+    while (i_rec < rec_points.size() && rec_points[i_rec].first <= t) {
+      recorded_spill++;
+      recorded_pot += rec_points[i_rec].second;
+      ++i_rec;
+    }
+
+    fout << FormatDateTimeYMDHM((std::time_t)t) << ","
+         << delivered_spill << ","
+         << recorded_spill << ","
+         << delivered_pot << ","
+         << recorded_pot << ","
+         << 100.*(recorded_pot/delivered_pot) << "\n";
+  }
+
+  ::Info("dataqualityplot_withBSD",
+         "Saved 10-min CSV to %s", PATH_POT_10MIN_CSV.c_str());
+}
+
+static void BuildAndSaveMissedSpillsCsv(
+    const std::vector<BsdSpill>& bsd_spills,
+    const std::unordered_set<size_t>& matched_bsd_indices)
+{
+  gSystem->mkdir(PATH_POT_INFO.c_str(), true);
+
+  std::ofstream fout(PATH_MISSED_SPILLS_CSV, std::ios::trunc);
+  if (!fout) {
+    ::Warning("dataqualityplot_withBSD",
+              "Failed to open missed spills CSV: %s", PATH_MISSED_SPILLS_CSV.c_str());
+    return;
+  }
+
+  fout << "#time, unixtime, spillnum, POT\n";
+  fout << std::setprecision(16);
+
+  // 1) Collect indices of missed spills (i.e., not matched by any lightyield event)
+  std::vector<size_t> missed;
+  missed.reserve(bsd_spills.size());
+  for (size_t i = 0; i < bsd_spills.size(); ++i) {
+    if (matched_bsd_indices.find(i) != matched_bsd_indices.end()) continue;
+    missed.push_back(i);
+  }
+
+  // 2) Sort by unixtime (trg_sec). If the time is identical, sort by spill number for stability.
+  std::sort(missed.begin(), missed.end(),
+            [&](size_t a, size_t b){
+              const auto& sa = bsd_spills[a];
+              const auto& sb = bsd_spills[b];
+              if (sa.trg_sec != sb.trg_sec) return sa.trg_sec < sb.trg_sec;
+              return sa.spillnum_full < sb.spillnum_full;
+            });
+
+  // 3) Write out missed spills in chronological order
+  for (size_t idx : missed) {
+    const auto& s = bsd_spills[idx];
+    fout << FormatDateTimeYMDHM((std::time_t)s.trg_sec) << ", "
+         << s.trg_sec << ", "
+         << s.spillnum_full << ", "
+         << s.pot << "\n";
+  }
+
+  ::Info("dataqualityplot_withBSD",
+         "Saved missed spills CSV to %s", PATH_MISSED_SPILLS_CSV.c_str());
 }
 
 // ------------------------
@@ -1402,6 +1570,9 @@ static void OneIteration(int refresh_ms)
   std::vector<double>                   all_nu_times_spill;  // max 1 event per spill
 
   // 4) Process all "ready" lightyield files
+  std::unordered_set<size_t> matched_bsd_indices;
+  matched_bsd_indices.reserve(bsd_spills.size());
+
   for (const auto& fi : ly_files) {
     if (!IsReadyLightyieldFile(fi)) continue;
 
@@ -1411,7 +1582,8 @@ static void OneIteration(int refresh_ms)
                                 all_points,
                                 all_nu_times,
                                 all_nu_times_spill,
-                                acq_rules);
+                                acq_rules,
+                                &matched_bsd_indices);
   }
 
   // 5) Rewrite cache files so they represent all current data
@@ -1420,6 +1592,10 @@ static void OneIteration(int refresh_ms)
   AppendNuEvents(all_nu_times);
   // Per-spill events (max 1 event per spill)
   AppendNuEventsSpill(all_nu_times_spill);
+  // 10-minute interval CSV output (Delivered/Recorded spills & POT)
+  BuildAndSavePotSpillCsv10Min(bsd_spills);
+  // Missed spills CSV output
+  BuildAndSaveMissedSpillsCsv(bsd_spills, matched_bsd_indices);
 
   // 6) Build & save Accumulated POT plot (Delivered + Recorded)
   BuildAndSaveAccumulatedPotPlot(bsd_spills);

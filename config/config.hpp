@@ -110,6 +110,6 @@ namespace FrostmonConfig {
     static const Int_t MIN_COUNTS_PER_BIN = 1000; // Minimum total number of ly>=10 p.e. entries per 6-hour bin to be shown
 // -----dataqualityplot_withBSD parameters -----
     static const Int_t SPILL_MOD = 32768;  // 2^15
-    static const Int_t MAX_TIME_DIFF = 5;  // ±5 sec allowance between BSD and LY unixtime
+    static const Int_t MAX_TIME_DIFF = 3000;  // ±3000 sec allowance between BSD and LY unixtime
 
 }

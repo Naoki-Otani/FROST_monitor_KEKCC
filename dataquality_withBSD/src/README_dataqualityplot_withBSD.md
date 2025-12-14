@@ -6,7 +6,8 @@
 beam quality and FROST detector performance.  
 It automatically processes BSD beam-summary ROOT files and FROST lightyield
 ROOT files, produces POT accumulation plots, daily event-rate plots (per bunch
-and per spill), and generates JavaScript summary files for a web dashboard.
+and per spill), generates JavaScript summary files for a web dashboard, and
+exports additional CSV reports (10-minute time series and missed-spill list).
 
 ---
 
@@ -15,7 +16,7 @@ and per spill), and generates JavaScript summary files for a web dashboard.
 ### 1. **Accumulated POT Plot**
 - Delivered POT (from BSD): **black curve**
 - Recorded POT (matched to FROST): **red curve**
-- Matching uses spill number + ±5s time tolerance.
+- Matching uses spill number + ±3000s time tolerance.
 - Output PDF:
   ```
   dataquality_withBSD/pot_plot/accumulated_pot_withBSD.pdf
@@ -60,7 +61,35 @@ Both histograms are fitted with a constant function `y = p0`.
 The fitted `χ²/ndf` and `p0 ± error` are shown in a statistics box in the
 top-right corner of each plot.
 
-### 3. **JavaScript Summary Files**
+### 3. **CSV Reports**
+
+Two CSV files are written to:
+```text
+dataquality_withBSD/pot_info/
+```
+
+1. **10-minute time series (`pot_spill_10min.csv`)**
+   - Output columns:
+     ```text
+     #time, delivered spill, recorded spill, delivered POT, recorded POT, efficiency[%]
+     ```
+   - Values are cumulative totals sampled on 10-minute bin boundaries.
+   - `efficiency[%]` is computed as:
+     ```text
+     100 * (recorded POT / delivered POT)
+     ```
+
+2. **Missed-spill list (`missed_spills.csv`)**
+   - Lists BSD spills with `spill_flag = 1` that were not matched/used by any
+     processed lightyield events (i.e., “delivered but not recorded” spills).
+   - Output columns:
+     ```text
+     #time, unixtime, spillnum, POT
+     ```
+   - The file is sorted in chronological order by `unixtime`.
+
+
+### 4. **JavaScript Summary Files**
 Automatically written to:
 ```
 dataquality_withBSD/pot_info/
@@ -193,6 +222,8 @@ dataquality_withBSD/
     delivered_pot.js
     recorded_pot.js
     efficiency.js
+    pot_spill_10min.csv
+    missed_spills.csv
 
   eventrate_plot/
     eventrate.tsv
