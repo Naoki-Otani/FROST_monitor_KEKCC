@@ -469,6 +469,40 @@ For each `cablenum`:
 - First, the raw light yield is computed from the calibrated ADC integral and reference gain information.
 - Then, the stored `lightyield` is:
 
+#### Light-yield conversion formula (per channel, per bunch)
+
+For each channel and bunch, the converter first computes an ADC integral after baseline subtraction:
+
+- `adcint[bunch]`: baseline-subtracted ADC integral for that bunch (see *Bunch integration, pile-up and undershoot handling* below)
+- `adcwin[bunch]`: **actual integration window length in samples** used to compute `adcint[bunch]`
+  after clamping the integration range to the waveform size.  
+  This window can be **shorter than `INT_RANGE`** in special cases, e.g.:
+  - pile-up clusters (non-last bunches integrate only one bunch interval `[start(b), start(b+1))`)
+  - the first undershoot-affected hit bunch (integrates only up to the undershoot onset)
+  - overlapped bunches whose integrals are replaced by a donor bunch (both `adcint` and `adcwin`
+    are reused from the donor)
+
+The calibrated light-yield (before the per-cable correction factor) is computed as:
+
+```cpp
+// pedestal scaling uses the *actual* integration window length adcwin[bunch]
+const double ly_raw =
+  (adcint[bunch] - zero_pe * (double)(adcwin[bunch])/(double)intrange_calib)
+  * (m1_ref_base - m0_ref_base)
+  / ((one_pe_base - zero_pe_base) * (m1_ref - m0_ref));
+```
+
+Where:
+
+- `zero_pe` is the per-cable pedestal expectation from the run’s calibration CSV (`calib_<RUNNAME>.csv`)
+- `intrange_calib` is the integration range (in samples) used in that calibration (from the same CSV)
+- `BASEREF_CALIB_CABLENUM` provides the reference cable for normalization:
+  - `(one_pe_base - zero_pe_base)` comes from the calibration of the reference cable
+  - `(m1_ref_base - m0_ref_base)` comes from the reference gain of the reference cable
+- `(m1_ref - m0_ref)` comes from the reference gain of the current cable
+
+Finally, `ly_raw` is multiplied by the per-cable correction factor:
+
 ```math
   \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
 ```
@@ -536,6 +570,14 @@ The converter therefore performs
   window       = [start_sample, start_sample + INT_RANGE)
   ```
 
+- **Note on pedestal scaling when the window changes**
+  - Some special-case integrations intentionally use a window shorter than `INT_RANGE`
+    (pile-up non-last bunches, truncated integration at undershoot onset, etc.).
+  - In those cases, the pedestal subtraction in the light-yield conversion **must scale with
+    the actual window length**. The tool therefore uses `adcwin[bunch]` (the clamped window
+    length used for `adcint[bunch]`) instead of always assuming `INT_RANGE`.  
+    See *Light-yield conversion formula (per channel, per bunch)* above.
+  
 - For a pile-up cluster spanning multiple consecutive bunches:
   - The **last** bunch in the cluster integrates a full `INT_RANGE` starting from
     its nominal start sample.
@@ -594,6 +636,9 @@ overlap hit regions or undershoot regions in neighboring bunches. To handle this
   - These bunch indices are recorded in `overlapped_bunch`.
   - For overlapped bunches **with at least one donor available**, the ADC integral
     is **reused** from the nearest donor bunch (in bunch index).
+    When reusing a donor, the tool also reuses the donor’s effective integration
+    window length, so pedestal subtraction remains consistent with the value of
+    `adcint` that was copied.
   - For overlapped bunches **with no donors available** (e.g. all bunches are
     hit or affected), the ADC integral is not trusted; instead, the corresponding
     **light yield is explicitly forced to 0.0** via an internal flag.  

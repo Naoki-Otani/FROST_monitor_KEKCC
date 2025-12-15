@@ -885,7 +885,7 @@ static void BuildAndSaveAccumulatedPotPlot(
   // 3) Draw Accumulated POT plot
   gStyle->SetOptStat(0);
 
-  TCanvas c("c_pot", "Accumulated POT (Delivered vs FROST)", 1200, 800);
+  TCanvas c("c_pot", "Accumulated POT (Delivered vs FROST)", 1600, 800);
   c.SetGrid();
   c.SetLeftMargin(0.12);
 

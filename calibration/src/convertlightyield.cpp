@@ -1,4 +1,3 @@
-//convertlightyield.cpp
 #include <TFile.h>
 #include <TTree.h>
 #include <TString.h>
@@ -519,6 +518,13 @@ static double integrate_adc_range(const std::vector<double>& wf,
   return integ;
 }
 
+// Clamp [jmin, jmax) to waveform range and return the clamped length.
+static inline int clamped_window_len(int ns, int jmin, int jmax)
+{
+  int a = std::max(0, jmin);
+  int b = std::min(ns, jmax);
+  return (b > a) ? (b - a) : 0;
+}
 
 static bool spillbit_from_waveform(const std::vector<double>& wf) {
   int count = 0;
@@ -699,6 +705,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
         if (idx < 0 || idx >= NOUT) continue;
 
         double adcint[NBUNCH] = {0.0};
+        int    adcwin[NBUNCH] = {0};   // actual integration window length in samples for each bunch
         bool force_zero_lightyield[NBUNCH] = {false};
 
         const auto& wf = waveform->at(ch);
@@ -861,6 +868,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
               int jmin = start_sample[b0];
               int jmax = jmin + INT_RANGE;
               adcint[b0] = integrate_adc_range(wf, bl, jmin, jmax);
+              adcwin[b0] = clamped_window_len(ns, jmin, jmax);
             } else {
               // Pileup cluster for this channel
               out_pileup_flag[idx] = 1;
@@ -875,6 +883,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                   jmax = start_sample[bb + 1];
                 }
                 adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+                adcwin[bb] = clamped_window_len(ns, jmin, jmax);
               }
             }
           }
@@ -887,6 +896,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
             int jmin = start_sample[bb];
             int jmax = jmin + INT_RANGE;
             adcint[bb] = integrate_adc_range(wf, bl, jmin, jmax);
+            adcwin[bb] = clamped_window_len(ns, jmin, jmax);
             donors.push_back(bb);
           }
 
@@ -904,9 +914,11 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
             if (jmax > jmin) {
               adcint[b0] = integrate_adc_range(wf, bl, jmin, jmax);
+              adcwin[b0] = clamped_window_len(ns, jmin, jmax);
             } else {
               // Undershoot starts before or at the bunch start: nothing to integrate
               adcint[b0] = 0.0;
+              adcwin[b0] = 0;
             }
 
             // Prevent donor replacement for this bunch
@@ -921,6 +933,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
             if (donors.empty()) {
               // No donor available: lightyield=0
               adcint[bb] = 0.0;
+              adcwin[bb] = 0;
               force_zero_lightyield[bb] = true;
             } else {
               int best_d   = donors[0];
@@ -933,6 +946,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
                 }
               }
               adcint[bb] = adcint[best_d];
+              adcwin[bb] = adcwin[best_d];
             }
           }
 
@@ -981,7 +995,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
         for(int bunch=0; bunch<NBUNCH; ++bunch){
           const double ly_raw =
-            (adcint[bunch] - zero_pe * (double)(INT_RANGE)/(double)intrange_calib)
+            (adcint[bunch] - zero_pe * (double)(adcwin[bunch])/(double)intrange_calib)
             * (m1_ref_base - m0_ref_base)
             / ((one_pe_base - zero_pe_base) * (m1_ref - m0_ref));
 
