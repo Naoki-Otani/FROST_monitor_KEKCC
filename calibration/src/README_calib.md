@@ -466,8 +466,8 @@ The file `lightyield_correctionfactor.csv` has the format:
 
 For each `cablenum`:
 
-- First, the raw light yield is computed from the calibrated ADC integral and reference gain information.
-- Then, the stored `lightyield` is:
+- First, the converter computes the **raw** light yield (`ly_raw`) from the baseline-subtracted ADC integral and
+  calibration/reference-gain parameters (formula below).
 
 #### Light-yield conversion formula (per channel, per bunch)
 
@@ -501,7 +501,7 @@ Where:
   - `(m1_ref_base - m0_ref_base)` comes from the reference gain of the reference cable
 - `(m1_ref - m0_ref)` comes from the reference gain of the current cable
 
-Finally, `ly_raw` is multiplied by the per-cable correction factor:
+Finally, `ly_raw` is multiplied by the per-cable correction factor and stored as `lightyield`:
 
 ```math
   \text{lightyield}_\text{out} = \text{lightyield}_\text{raw} \times \text{correction\_factor}(\text{cablenum})
