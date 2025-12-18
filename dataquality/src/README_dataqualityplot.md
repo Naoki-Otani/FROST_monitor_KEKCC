@@ -1,6 +1,6 @@
 # Data Quality Plotter (ROOT, C++)
 
-This program monitors a directory where ROOT files (from `convertlightyield`) are created in real time and generates several data-quality plots for the **latest run** (online monitoring), plus a time-history 2D plot accumulated across **all runs** in the directory with **6-hour time bins**.
+This program monitors a directory where ROOT files (from `convertlightyield`) are created in real time and generates several data-quality plots for the **latest run** (online monitoring), plus time-history plots accumulated across **all runs** (e.g. the 6-hour binned lightyield history and the calibration gain stability history).
 
 In addition to the online monitoring of the latest run, the program also **backfills per-run PDFs for older runs**: if a run has “ready” ROOT files but some expected PDFs are missing, those PDFs are generated once, even if the run is not the latest.
 
@@ -31,7 +31,17 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/runXXXXX_chavg_lightyield_hist.pdf`
 
-3. **Per-channel lightyield histograms per RAYRAW plane (latest run)**  
+3. **Per-cablenum CSV (average lightyield and statistics, per run)**  
+   - For each run, the program also writes a CSV listing (cablenum, average lightyield, #entries) computed from the same definition as feature 2:
+     - Average uses only `lightyield >= 10 p.e.` over all events and all bunches.
+     - `# of events over 10 p.e.` is the total number of (event, bunch) entries with `lightyield >= 10 p.e.` for that channel in that run.
+   - The output is sorted by cablenum in ascending order.
+
+   Output (CSV):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/runXXXXX_chavg_lightyield.csv`
+
+
+4. **Per-channel lightyield histograms per RAYRAW plane (latest run)**  
    - For each RAYRAW plane (`1..11`) and local channel (`0..31`), build a lightyield histogram using all bunches of the latest run.  
    - One PDF per RAYRAW plane: an 8×4 pad canvas (32 channels) with **log-scale y axis**.
 
@@ -39,7 +49,7 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield_each_ch/runXXXXX_RAYRAW#YY.pdf`  
      (YY = `01`..`11`)
 
-4. **Average lightyield and hit statistics vs position (latest run)**  
+5. **Average lightyield and hit statistics vs position (latest run)**  
    Using the cable mapping defined in `CableToPosition(int cablenum, double& x, double& y)`, the program builds 1D profiles versus physical position along the X and Y axes.
 
    - **Average lightyield vs position**
@@ -67,7 +77,7 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    - Number of entries with `ly ≥ 10 p.e.` vs position (X/Y):
      - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/runXXXXX_nevents_over10_profile_xy.pdf`
 
-5. **xg–yg 2D barycenter (latest run)**  
+6. **xg–yg 2D barycenter (latest run)**  
    - Follows the previous implementation: cable mapping to x/y and weight `lightyield^XG_WEIGHT` (default 4.0).  
    - For each event, compute barycenter **per bunch** (8 times).  
    - Selection: `lightmax_x > 10` **and** `lightmax_y > 10`.
@@ -75,17 +85,17 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/xgyg/runXXXXX_xgyg.pdf`
 
-6. **evnum vs unixtime graph (latest run)**
+7. **evnum vs unixtime graph (latest run)**
 
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/unixtime/runXXXXX_evnum_vs_unixtime.pdf`
 
-7. **evnum vs spillnum graph (latest run)**
+8. **evnum vs spillnum graph (latest run)**
 
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/spillnum/runXXXXX_evnum_vs_spillnum.pdf`
 
-8. **Average lightyield history 2D (all runs, 6-hour bins)**  
+9. **Average lightyield history 2D (all runs, 6-hour bins)**  
    - Accumulates per (time-bin, channel) the average of values **≥ 10 p.e.** across **all files** in the directory.  
    - Uses two on-disk caches for incremental updates:
      - `processed_files.tsv` — remember processed files and their modification times.
@@ -106,14 +116,53 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
 
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h.pdf`
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h_norm.pdf`  
+     (Normalized by a reference average lightyield per cablenum; see “Reference lightyield CSV” below.)
 
+10. **Normalized average lightyield history 2D (all runs, 6-hour bins)**  
+   - If a reference CSV is available (see below), the program also produces a normalized version:
+     `normalized = (average lightyield in the 6-hour bin) / (reference average lightyield for that cablenum)`.
+   - The display range and the 6-hour bin fill/skip rule are the same as feature 9.
+   - If the reference CSV or the cablenum mapping cannot be obtained, this plot is **skipped**.
+
+   Output (PDF):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h_norm.pdf`
+
+11. **Calibration base-reference gain stability (all runs)**  
+   The program monitors the gain stability of a fixed “base reference” calibration channel
+   specified by `FrostmonConfig::BASEREF_CALIB_CABLENUM` (a `cablenum` value).
+
+   - Input calibration CSV directory:
+     - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/calibration/calibresult/`
+   - Input calibration CSV naming convention:
+     - `calib_run00003_0_9999.csv` (i.e. `calib_<runTag>_<seg0>_<seg1>.csv`)
+   - CSV format (header):
+     - `#cablenum,0pe,0pe_error,1pe,1pe_error,integralrange,badflag`
+     - `badflag` is ignored for this plot.
+
+   For each CSV file, the program reads the row with `cablenum == BASEREF_CALIB_CABLENUM` and computes:
+   - Gain (y value): `gain = 1pe - 0pe`
+   - Gain error (y error): `gain_err = sqrt( (1pe_error)^2 + (0pe_error)^2 )`
+
+   Time assignment (x value and x error) uses the corresponding lightyield ROOT file
+   `rootfile_aftercalib/<runTag>_<seg0>_<seg1>_lightyield.root`:
+   - Let `u0` be the `unixtime` of the first event and `u1` be that of the last event
+     (the code uses `unixtime[0]` in the first/last entry).
+   - The point is placed at `x = (u0 + u1)/2` with `x_err = |u1 - u0|/2`.
+   - **If the corresponding ROOT file does not exist or is invalid, the point is skipped** (no fallback to CSV timestamps).
+
+   Output (PDF):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/gain/ALL_baseref_gain_history.pdf`
 ---
 
 ### Per-run plot behavior
 
 - The **latest run** is always processed every iteration (online monitoring); its per-run PDFs are **continuously updated** as new data arrive.
 - For **older runs**, if the program finds “ready” ROOT files and detects that one or more expected PDFs are **missing**, it generates the full set of per-run PDFs for that run **once** (backfill). Once all PDFs exist, that run is skipped in subsequent iterations.
-- The **6-hour binned lightyield history 2D plot** is always accumulated over **all runs** and updated incrementally, independent of which run is latest.
+- The **6-hour binned lightyield history 2D plots** are always accumulated over **all runs** and updated incrementally, independent of which run is latest:
+  - `ALL_chavg_lightyield_history_2D_6h.pdf`
+  - `ALL_chavg_lightyield_history_2D_6h_norm.pdf` (only if reference CSV + cablenum mapping are available)
+- The **calibration base-reference gain stability plot** is also updated every iteration as an **all-runs** history plot. Points are filled only when both the calibration CSV and the corresponding lightyield ROOT file are available.
 ---
 
 ## Requirements
@@ -121,6 +170,11 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
 - ROOT (tested with ROOT 6).  
 - A POSIX-like environment (Linux).  
 - The directories referenced by the program must exist or be creatable by the user.
+- **Reference lightyield CSV (required only for the normalized 6-hour history plot)**  
+  The normalized plot `ALL_chavg_lightyield_history_2D_6h_norm.pdf` requires a reference CSV file:
+  `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ReferenceLightyield/Reference_chavg_lightyield.csv`  
+  (The exact filename is configured by `FrostmonConfig::REF_LY_CSV` and the code reads it from
+  `.../dataquality/lightyield/ReferenceLightyield/<REF_LY_CSV>`.)
 
 ---
 
@@ -165,6 +219,22 @@ g++ -O2 -std=c++17 dataqualityplot.cpp -o dataqualityplot $(root-config --cflags
 
   For runs **other than the latest**, the same “ready file” conditions are applied. If a non-latest run has at least one ready ROOT file and some of its per-run PDFs are missing, the program generates the full set of per-run PDFs for that run (backfill) in one of the subsequent iterations.
 
+- Reference lightyield CSV (for the normalized 6-hour history):
+  - Path (default in this setup):  
+    `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ReferenceLightyield/Reference_chavg_lightyield.csv`
+  - Format (per line): `#cablenum, average light yield [p.e.], # of events over 10 p.e.`
+  - If the file is missing or empty, the normalized history plot is not produced.
+
+- Calibration CSV files for gain monitoring live in:
+  `/group/nu/ninja/work/otani/FROST_beamdata/e71c/calibration/calibresult/`
+  and are named like:
+  `calib_run00103_0_9999.csv`, `calib_run00103_10000_19999.csv`, …
+  The gain stability plot uses only entries where the corresponding lightyield ROOT file exists.
+
+ - Per-run CSV output:
+   - The program also writes one per-run CSV in:
+     `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/runXXXXX_chavg_lightyield.csv`
+   - This CSV is generated together with the per-run PDFs (latest-run online monitoring and older-run backfill).
 
 - Tree layout (as produced by `convertlightyield_rayraw_*`):
   - `evnum/I`
@@ -187,7 +257,7 @@ Time-axis plots (when applicable) are shown in **JST** by using:
 ```cpp
 axis->SetTimeDisplay(1);
 axis->SetTimeOffset(0, "local");   // relies on OS timezone (JST on Japanese servers)
-axis->SetTimeFormat("#splitline{%Y-%m-%d}{%H:%M}");
+axis->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
 ```
 
 If the server is pinned to UTC, you can force UTC+9:

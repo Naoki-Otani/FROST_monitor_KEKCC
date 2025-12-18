@@ -26,6 +26,10 @@ namespace FrostmonConfig {
     const std::string REFGAIN_CSV = "ReferenceGain_fiberdif.csv";
     const std::string LIGHTYIELD_CORR_CSV = "lightyield_correctionfactor.csv";
 
+    // Reference light yield CSV (cablenum -> reference average light yield)
+    static const std::string REF_LY_CSV = "Reference_chavg_lightyield.csv";
+
+
 
 // ----- Calibration parameters -----
     const Int_t N_RAYRAW = 11;          // plane count (1..11)
@@ -64,6 +68,9 @@ namespace FrostmonConfig {
     static const Int_t NBUNCH       = 8;
 
     static const Int_t BASEREF_CALIB_CABLENUM = 311;
+    // static const Int_t BASEREF_CALIB_CABLENUM = 318;
+    // static const Int_t BASEREF_CALIB_CABLENUM = 327;
+
 
     static const Int_t SPILL_BIT_ADC_THRESHOLD = 600;
     static const Int_t SPILL_BIT_MIN_POINTS    = 5;

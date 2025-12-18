@@ -620,10 +620,9 @@ static void ProcessLightyieldFileForPOT(
 
   // Determine DAQ run number and acquired bunch mask for this lightyield file.
   // The run number is taken from the lightyield file name
- // (e.g. run00003_... -> run = 3).
- const int run_number = ExtractRunNumberFromLyPath(path);
- const unsigned char acquired_bunch_mask = GetAcquiredBunchMaskForRun(run_number, acq_rules);
-
+  // (e.g. run00003_... -> run = 3).
+  const int run_number = ExtractRunNumberFromLyPath(path);
+  const unsigned char acquired_bunch_mask = GetAcquiredBunchMaskForRun(run_number, acq_rules);
 
   std::unordered_set<size_t> used_bsd_indices;
   used_bsd_indices.reserve(1024);
@@ -901,6 +900,7 @@ static void BuildAndSaveAccumulatedPotPlot(
     gr_del->SetLineColor(kBlack);
     gr_del->SetLineWidth(2);
     gr_del->SetMarkerStyle(0);
+    gr_del->SetMinimum(0);
 
     TAxis* ax = gr_del->GetXaxis();
     ax->SetTimeDisplay(1);
@@ -908,7 +908,7 @@ static void BuildAndSaveAccumulatedPotPlot(
     ax->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
     ax->SetLabelSize(0.03);
     ax->SetLabelOffset(0.02);
-    ax->SetTitleOffset(1.3);
+    ax->SetTitleOffset(1.5);
     ax->SetNdivisions(520);
 
     gr_del->Draw("AL");
@@ -924,7 +924,7 @@ static void BuildAndSaveAccumulatedPotPlot(
       ax->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
       ax->SetLabelSize(0.03);
       ax->SetLabelOffset(0.02);
-      ax->SetTitleOffset(1.3);
+      ax->SetTitleOffset(1.5);
       ax->SetNdivisions(520);
       gr_rec->Draw("AL");
     } else {
@@ -933,6 +933,7 @@ static void BuildAndSaveAccumulatedPotPlot(
     gr_rec->SetLineColor(kRed);
     gr_rec->SetLineWidth(2);
     gr_rec->SetMarkerStyle(0);
+    gr_rec->SetMinimum(0);
   }
 
   // Legend
@@ -1252,6 +1253,7 @@ static void BuildAndSaveEventRatePlot()
   c.SetLeftMargin(0.12);
 
   h.GetXaxis()->SetLabelSize(0.04);
+  h.GetXaxis()->SetTitleOffset(1.5);
   h.GetXaxis()->LabelsOption("v");  // vertical labels if many days
 
   double ymax = h.GetMaximum();

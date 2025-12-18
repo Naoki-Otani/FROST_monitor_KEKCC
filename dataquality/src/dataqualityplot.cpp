@@ -1,6 +1,7 @@
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
+#include <TGraphErrors.h>
 #include <TError.h>
 #include <TCanvas.h>
 #include <TH1D.h>
@@ -69,7 +70,13 @@ static const std::string PATH_LY_PROC  = FrostmonConfig::OUTPUT_DIR + "/dataqual
 static const std::string PATH_LY_BINS  = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/chavg_bins.tsv";
 static const Double_t BINW_SEC = FrostmonConfig::BINW_SEC;
 static const Int_t MIN_COUNTS_PER_BIN = FrostmonConfig::MIN_COUNTS_PER_BIN; // Minimum total number of ly>=10 p.e. entries per 6-hour bin to be shown
+// Reference light yield CSV (cablenum -> reference average light yield)
+static const std::string PATH_REF_LY = FrostmonConfig::OUTPUT_DIR + "/dataquality/lightyield/ReferenceLightyield/" + FrostmonConfig::REF_LY_CSV;
 
+// Calibration gain stability (base reference channel)
+static const Int_t BASEREF_CALIB_CABLENUM = FrostmonConfig::BASEREF_CALIB_CABLENUM;
+static const std::string PATH_CALIBRES = FrostmonConfig::OUTPUT_DIR + "/calibration/calibresult/";
+static const std::string PATH_OUT_CALIB = FrostmonConfig::OUTPUT_DIR + "/dataquality/gain/";
 // I/O paths
 static const std::string PATH_ROOT     = FrostmonConfig::OUTPUT_DIR + "/rootfile_aftercalib/";
 static const std::string PATH_OUT_TDC  = FrostmonConfig::OUTPUT_DIR + "/dataquality/tdc/";
@@ -115,6 +122,15 @@ static bool IsLikelyStableFile(const std::string& path, int wait_ms = 500) {
   Long_t id2=0, sz2=0, fl2=0, mt2=0;
   if (!GetPathInfo(path, id2, sz2, fl2, mt2)) return false;
   return (sz1 == sz2);
+}
+
+static void SetupTimeAxis(TAxis* ax) {
+  if (!ax) return;
+  ax->SetTimeDisplay(1);
+  ax->SetTimeOffset(0, "local");
+  ax->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
+  ax->SetLabelSize(0.03);
+  ax->SetLabelOffset(0.02);
 }
 
 static std::string ExtractRunTag(const std::string& fname) {
@@ -173,6 +189,280 @@ static bool IsReadyLightyieldFile(const FileInfoLite& fi,
   if (nowSec - fi.mtime < stableSec) return false;
 
   return true;
+}
+
+// Load reference average light yield from CSV.
+// CSV format:
+//   #cablenum, average light yield [p.e.], # of events over 10 p.e.
+//   1, 76.3585, 2092
+static bool LoadReferenceLightyieldCsv(std::unordered_map<int, double>& ref_by_cable)
+{
+  ref_by_cable.clear();
+
+  std::ifstream fin(PATH_REF_LY);
+  if (!fin) return false;
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty() || line[0] == '#') continue;
+
+    // Replace commas with spaces for easy parsing.
+    for (char& c : line) {
+      if (c == ',') c = ' ';
+    }
+
+    std::istringstream iss(line);
+    int cab = -1;
+    double avg = 0.0;
+    long long dummy_n = 0;
+
+    if (!(iss >> cab >> avg >> dummy_n)) continue;
+    if (cab <= 0) continue;
+    if (!std::isfinite(avg) || avg <= 0.0) continue;
+
+    ref_by_cable[cab] = avg;
+  }
+
+  return !ref_by_cable.empty();
+}
+
+// Build ch -> cablenum mapping using any ready lightyield ROOT file.
+// This is used for ALL-run history plots.
+static bool GetCablenumMappingFromAnyReadyFile(std::vector<int>& cab_of_ch)
+{
+  cab_of_ch.assign(NOUT, -1);
+
+  auto all = ListLightyieldFiles(PATH_ROOT);
+  for (const auto& fi : all) {
+    if (!IsReadyLightyieldFile(fi)) continue;
+
+    TFile f(fi.path.c_str(), "READ");
+    if (f.IsZombie()) continue;
+
+    TTree* t = (TTree*)f.Get(TREE_NAME);
+    if (!t) { f.Close(); continue; }
+
+    t->SetBranchStatus("*", 0);
+    if (!t->GetBranch("cablenum")) { f.Close(); continue; }
+
+    Int_t cablenum_arr[NOUT];
+    t->SetBranchStatus("cablenum", 1);
+    t->SetBranchAddress("cablenum", cablenum_arr);
+
+    if (t->GetEntries() <= 0) { f.Close(); continue; }
+
+    // Assume cablenum is constant for each channel.
+    t->GetEntry(0);
+    for (int ch = 0; ch < NOUT; ++ch) {
+      cab_of_ch[ch] = (int)cablenum_arr[ch];
+    }
+
+    f.Close();
+    return true;
+  }
+
+  return false;
+}
+// ------------------------
+// Calibration gain (base reference) stability
+// ------------------------
+
+struct CalibCsvInfoLite {
+  std::string path;
+  Long_t size = 0;
+  Long_t mtime = 0;
+  std::string runTag; // e.g. run00003
+  int seg0 = -1;
+  int seg1 = -1;
+};
+
+static std::vector<CalibCsvInfoLite> ListCalibCsvFiles(const std::string& dir)
+{
+  std::vector<CalibCsvInfoLite> out;
+  TSystemDirectory d("calibdir", dir.c_str());
+  TList* files = d.GetListOfFiles();
+  if (!files) return out;
+
+  std::regex re("^calib_(run\\d{5})_(\\d+)_(\\d+)\\.csv$");
+
+  TIter it(files);
+  while (TSystemFile* f = (TSystemFile*)it()) {
+    TString name = f->GetName();
+    if (f->IsDirectory()) continue;
+    if (!name.EndsWith(".csv")) continue;
+
+    std::smatch m;
+    std::string sname = name.Data();
+    if (!std::regex_match(sname, m, re)) continue;
+
+    const std::string runTag = m[1].str();
+    const int seg0 = std::stoi(m[2].str());
+    const int seg1 = std::stoi(m[3].str());
+
+    std::string path = dir + sname;
+    Long_t id=0, sz=0, fl=0, mt=0;
+    if (GetPathInfo(path, id, sz, fl, mt)) {
+      out.push_back({path, sz, mt, runTag, seg0, seg1});
+    }
+  }
+
+  // newest first (mtime desc)
+  std::sort(out.begin(), out.end(), [](const CalibCsvInfoLite& a, const CalibCsvInfoLite& b){
+    return a.mtime > b.mtime;
+  });
+  return out;
+}
+
+// Read gain (=1pe-0pe) and its error for a given cablenum from a calib CSV.
+// CSV format:
+// #cablenum,0pe,0pe_error,1pe,1pe_error,integralrange,badflag
+static bool LoadGainFromCalibCsv(const std::string& csvpath, int target_cab,
+                                 double& gain, double& gain_err)
+{
+  gain = std::numeric_limits<double>::quiet_NaN();
+  gain_err = std::numeric_limits<double>::quiet_NaN();
+
+  std::ifstream fin(csvpath);
+  if (!fin) return false;
+
+  std::string line;
+  while (std::getline(fin, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    for (char& c : line) if (c == ',') c = ' ';
+
+    std::istringstream iss(line);
+    int cab = -1, integralrange = 0, bf = 0;
+    double z0=0.0, z0e=0.0, o1=0.0, o1e=0.0;
+
+    if (!(iss >> cab >> z0 >> z0e >> o1 >> o1e >> integralrange >> bf)) continue;
+    if (cab != target_cab) continue;
+
+    const double g = o1 - z0;
+    const double ge = std::sqrt(o1e*o1e + z0e*z0e);
+    if (!std::isfinite(g) || !std::isfinite(ge)) return false;
+
+    gain = g;
+    gain_err = ge;
+    return true;
+  }
+  return false;
+}
+
+// Get (u0,u1) from the corresponding lightyield ROOT file for this calib CSV.
+// Returns false if ROOT missing/invalid.
+static bool GetRunUnixTimeRange(const std::string& runTag, int seg0, int seg1,
+                                double& u0, double& u1)
+{
+  u0 = std::numeric_limits<double>::quiet_NaN();
+  u1 = std::numeric_limits<double>::quiet_NaN();
+
+  const std::string rootpath =
+      PATH_ROOT + runTag + "_" + std::to_string(seg0) + "_" + std::to_string(seg1) + "_lightyield.root";
+
+  // must exist
+  if (gSystem->AccessPathName(rootpath.c_str()) != kFALSE) return false;
+
+  TFile f(rootpath.c_str(), "READ");
+  if (f.IsZombie()) return false;
+  TTree* t = (TTree*)f.Get(TREE_NAME);
+  if (!t) { f.Close(); return false; }
+  if (!t->GetBranch("unixtime")) { f.Close(); return false; }
+
+  Double_t unixtime_arr[NOUT];
+  t->SetBranchStatus("*", 0);
+  t->SetBranchStatus("unixtime", 1);
+  t->SetBranchAddress("unixtime", unixtime_arr);
+
+  const Long64_t nent = t->GetEntries();
+  if (nent <= 0) { f.Close(); return false; }
+
+  t->GetEntry(0);
+  const double first = unixtime_arr[0];
+  t->GetEntry(nent - 1);
+  const double last = unixtime_arr[0];
+  f.Close();
+
+  if (!std::isfinite(first) || !std::isfinite(last)) return false;
+  u0 = first;
+  u1 = last;
+  return true;
+}
+
+static void BuildAndSaveBaseRefGainHistory()
+{
+  auto csvs = ListCalibCsvFiles(PATH_CALIBRES);
+  if (csvs.empty()) return;
+
+  std::vector<double> vx, vex, vy, vey;
+  vx.reserve(csvs.size());
+  vex.reserve(csvs.size());
+  vy.reserve(csvs.size());
+  vey.reserve(csvs.size());
+
+  for (const auto& fi : csvs) {
+    double gain=0.0, gain_err=0.0;
+    if (!LoadGainFromCalibCsv(fi.path, BASEREF_CALIB_CABLENUM, gain, gain_err)) continue;
+
+    // Use ROOT unixtime range -> midpoint & half-range as x error
+    double u0=0.0, u1=0.0;
+    if (!GetRunUnixTimeRange(fi.runTag, fi.seg0, fi.seg1, u0, u1)) continue;
+    const double x  = 0.5 * (u0 + u1);
+    const double ex = 0.5 * std::fabs(u1 - u0);
+    if (!std::isfinite(x) || !std::isfinite(ex)) continue;
+    vx.push_back(x);
+    vex.push_back(ex);
+    vy.push_back(gain);
+    vey.push_back(gain_err);
+  }
+
+  const int n = (int)vx.size();
+  if (n <= 0) return;
+
+  // Sort points by x ascending (TGraphErrors doesn't sort automatically)
+  std::vector<int> idx(n);
+  for (int i = 0; i < n; ++i) idx[i] = i;
+  std::sort(idx.begin(), idx.end(), [&](int a, int b){ return vx[a] < vx[b]; });
+
+  std::vector<double> sx(n), sex(n), sy(n), sey(n);
+  for (int i = 0; i < n; ++i) {
+    sx[i]  = vx[idx[i]];
+    sex[i] = vex[idx[i]];
+    sy[i]  = vy[idx[i]];
+    sey[i] = vey[idx[i]];
+  }
+
+  gSystem->mkdir(PATH_OUT_CALIB.c_str(), true);
+
+  TGraphErrors gr(n, sx.data(), sy.data(), sex.data(), sey.data());
+  gr.SetTitle(Form("Gain stability (cablenum=%d);time;ADC Integral / p.e.", BASEREF_CALIB_CABLENUM));
+  gr.SetMarkerStyle(20);
+  gr.SetMarkerSize(0.8);
+
+  TCanvas c("c_baseref_gain", "Base reference gain history", 1200, 700);
+  c.SetGrid();
+  c.SetLeftMargin(0.12);
+  c.SetBottomMargin(0.12);
+
+  gr.Draw("AP");
+  c.Update();
+
+  SetupTimeAxis(gr.GetXaxis());
+  gr.GetYaxis()->SetTitleOffset(1.4);
+  gr.GetXaxis()->SetNdivisions(520, kTRUE);
+
+  TDatime now;
+  TPaveText note(0.80, 0.85, 0.99, 0.99, "NDC");
+  note.SetFillColor(0);
+  note.SetTextAlign(12);
+  note.AddText(Form("cablenum: %d", BASEREF_CALIB_CABLENUM));
+  note.AddText(Form("Points: %d", n));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                    now.GetYear(), now.GetMonth(), now.GetDay(),
+                    now.GetHour(), now.GetMinute(), now.GetSecond()));
+  note.Draw();
+
+  TString outpdf = TString::Format("%sALL_baseref_gain_history.pdf", PATH_OUT_CALIB.c_str());
+  c.SaveAs(outpdf);
 }
 
 // ------------------------
@@ -824,6 +1114,93 @@ static void BuildAndSaveLyVsPosition(
 }
 
 // ------------------------
+// CSV: Average LY per cablenum (per run)
+// ------------------------
+
+struct LyCsvRow {
+  int cablenum = -1;
+  double avg_ly = 0.0;
+  long long n_over10 = 0;
+};
+
+static bool GetCablenumMappingForRun(const std::vector<FileInfoLite>& stableFiles,
+                                    std::vector<int>& cab_of_ch)
+{
+  cab_of_ch.assign(NOUT, -1);
+  if (stableFiles.empty()) return false;
+
+  TFile f(stableFiles.front().path.c_str(), "READ");
+  if (f.IsZombie()) return false;
+
+  TTree* t = (TTree*)f.Get(TREE_NAME);
+  if (!t) { f.Close(); return false; }
+
+  t->SetBranchStatus("*", 0);
+  if (!t->GetBranch("cablenum")) { f.Close(); return false; }
+
+  Int_t cablenum_arr[NOUT];
+  t->SetBranchStatus("cablenum", 1);
+  t->SetBranchAddress("cablenum", cablenum_arr);
+
+  if (t->GetEntries() <= 0) { f.Close(); return false; }
+
+  // Assume cablenum is constant for each channel in this run.
+  t->GetEntry(0);
+  for (int ch = 0; ch < NOUT; ++ch) {
+    cab_of_ch[ch] = (int)cablenum_arr[ch];
+  }
+
+  f.Close();
+  return true;
+}
+
+static void BuildAndSaveChAvgLightyieldCsv(const std::string& runTag,
+                                          const std::vector<FileInfoLite>& stableFiles,
+                                          const std::vector<double>& sum,
+                                          const std::vector<int>& cnt)
+{
+  // Get cablenum for each channel.
+  std::vector<int> cab_of_ch;
+  if (!GetCablenumMappingForRun(stableFiles, cab_of_ch)) return;
+
+  std::vector<LyCsvRow> rows;
+  rows.reserve(NOUT);
+
+  for (int ch = 0; ch < NOUT; ++ch) {
+    const int cab = cab_of_ch[ch];
+    if (cab <= 0) continue;
+
+    const long long n_over10 = (long long)cnt[ch];
+    const double avg_ly = (cnt[ch] > 0) ? (sum[ch] / (double)cnt[ch]) : 0.0;
+
+    rows.push_back({cab, avg_ly, n_over10});
+  }
+
+  // Sort by cablenum in ascending order: 1,2,3,...
+  std::sort(rows.begin(), rows.end(),
+            [](const LyCsvRow& a, const LyCsvRow& b) { return a.cablenum < b.cablenum; });
+
+  gSystem->mkdir(PATH_OUT_LY.c_str(), true);
+
+  const std::string outcsv = PATH_OUT_LY + runTag + "_chavg_lightyield.csv";
+  std::ofstream fout(outcsv, std::ios::trunc);
+  if (!fout) return;
+
+  // Header (as requested)
+  fout << "#cablenum, average light yield [p.e.], # of events over 10 p.e.\n";
+
+  // Use a reasonable precision without forcing fixed trailing zeros.
+  fout << std::setprecision(6) << std::defaultfloat;
+
+  for (const auto& r : rows) {
+    fout << r.cablenum << ", " << r.avg_ly << ", " << r.n_over10 << "\n";
+  }
+
+  fout.close();
+}
+
+
+// ------------------------
 // evnum vs unixtime
 // ------------------------
 
@@ -1101,14 +1478,54 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
       nbx, tmin, tmax,
       NBINS_LYAVG, XMIN_LYAVG, XMAX_LYAVG));
 
-  h->GetXaxis()->SetTimeDisplay(1);
-  h->GetXaxis()->SetTimeOffset(0, "local");
-  h->GetXaxis()->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
-  h->GetXaxis()->SetLabelSize(0.03);
-  h->GetXaxis()->SetLabelOffset(0.02);
-  h->GetXaxis()->SetTitleOffset(1.3);
+  // Load reference light yield (cablenum -> reference avg)
+  std::unordered_map<int, double> ref_by_cable;
+  const bool has_ref = LoadReferenceLightyieldCsv(ref_by_cable);
+
+  // Build ch -> cablenum mapping from any ready ROOT file
+  std::vector<int> cab_of_ch;
+  const bool has_map = GetCablenumMappingFromAnyReadyFile(cab_of_ch);
+
+  // Convert reference map to ch-indexed array for fast lookup
+  std::vector<double> ref_by_ch(NOUT, std::numeric_limits<double>::quiet_NaN());
+  if (has_ref && has_map) {
+    for (int ch = 0; ch < NOUT; ++ch) {
+      const int cab = cab_of_ch[ch];
+      auto it = ref_by_cable.find(cab);
+      if (it != ref_by_cable.end() && std::isfinite(it->second) && it->second > 0.0) {
+        ref_by_ch[ch] = it->second;
+      }
+    }
+  }
+
+  // Normalized history: (avg light yield) / (reference avg light yield)
+  static const int    NBINS_LY_NORM = NBINS_LYAVG;
+  static const double YMIN_NORM = 0.0;
+  static const double YMAX_NORM = 2.0;
+
+  std::unique_ptr<TH2D> h_norm;
+  if (has_ref && has_map) {
+    h_norm.reset(new TH2D(
+        "h_lyavg_norm_hist2d",
+        "Normalized average light yield history;time;Average light yield / Reference average light yield",
+        nbx, tmin, tmax,
+        NBINS_LY_NORM, YMIN_NORM, YMAX_NORM));
+  }
+
+  // Common time-axis styling for both histograms
+  auto setup_time_axis = [](TH2D* hh){
+    hh->GetXaxis()->SetTimeDisplay(1);
+    hh->GetXaxis()->SetTimeOffset(0, "local");
+    hh->GetXaxis()->SetTimeFormat("#splitline{%m/%d}{%H:%M}");
+    hh->GetXaxis()->SetLabelSize(0.03);
+    hh->GetXaxis()->SetLabelOffset(0.02);
+    hh->GetXaxis()->SetTitleOffset(1.3);
+  };
+  setup_time_axis(h.get());
+  if (h_norm) setup_time_axis(h_norm.get());
 
   long long npoints = 0;
+  long long npoints_norm = 0;
   for (long long bin = bin_min; bin <= bin_max; ++bin) {
     long long total_cnt_in_bin = 0;
     for (int ch = 0; ch < NOUT; ++ch) {
@@ -1131,43 +1548,89 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
       }
       h->Fill(t, avg);
       ++npoints;
+
+
+      // Fill normalized value if reference is available
+      if (h_norm) {
+        const double ref = ref_by_ch[ch];
+        if (std::isfinite(ref) && ref > 0.0 && std::isfinite(avg)) {
+          const double norm = avg / ref;
+          h_norm->Fill(t, norm);
+          ++npoints_norm;
+        }
+      }
     }
   }
 
   gSystem->mkdir(PATH_OUT_LY.c_str(), true);
   gStyle->SetOptStat(0);
 
-  TCanvas c("c_lyavg_hist2d", "LY avg history (6h bins)", 2000, 800);
-  c.SetGrid();
-  h->SetContour(99);
-  h->GetXaxis()->SetNdivisions(520, kTRUE);
+  // X range cut for display (local time)
+  const double t_cut  = unixTimeLocal(2025, 11, 29, 18, 0, 0);
+  const double x_min_plot = std::max(tmin, t_cut);
+  const double x_max_plot = tmax;
 
-  // Limit visible X range to >= 2025-11-29 18:00 (local time).
+  // Original (avg light yield) plot
   {
-    const double t_cut  = unixTimeLocal(2025, 11, 29, 18, 0, 0);
-    const double x_min_plot = std::max(tmin, t_cut);
-    const double x_max_plot = tmax;
+    TCanvas c("c_lyavg_hist2d", "LY avg history (6h bins)", 2000, 800);
+    c.SetGrid();
+    h->SetContour(99);
+    h->GetXaxis()->SetNdivisions(520, kTRUE);
+
     if (x_min_plot < x_max_plot) {
       h->GetXaxis()->SetRangeUser(x_min_plot, x_max_plot);
     }
+
+    h->Draw("COLZ");
+    h->GetYaxis()->SetTitleOffset(1.1);
+
+    TDatime now;
+    TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
+    note.SetFillColor(0);
+    note.SetTextAlign(12);
+    note.AddText("Run: ALL (6h bins)");
+    note.AddText(Form("Entries: %lld", npoints));
+    note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                      now.GetYear(), now.GetMonth(), now.GetDay(),
+                      now.GetHour(), now.GetMinute(), now.GetSecond()));
+    note.Draw();
+
+    TString outpdf = TString::Format("%sALL_chavg_lightyield_history_2D_6h.pdf", PATH_OUT_LY.c_str());
+    c.SaveAs(outpdf);
   }
 
-  h->Draw("COLZ");
-  h->GetYaxis()->SetTitleOffset(1.1);
+  // Normalized (avg / reference) plot
+  if (h_norm) {
+    TCanvas c("c_lyavg_norm_hist2d", "Normalized LY avg history (6h bins)", 2000, 800);
+    c.SetGrid();
+    h_norm->SetContour(99);
+    h_norm->GetXaxis()->SetNdivisions(520, kTRUE);
 
-  TDatime now;
-  TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
-  note.SetFillColor(0);
-  note.SetTextAlign(12);
-  note.AddText("Run: ALL (6h bins)");
-  note.AddText(Form("Entries: %lld", npoints));
-  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
-                    now.GetYear(), now.GetMonth(), now.GetDay(),
-                    now.GetHour(), now.GetMinute(), now.GetSecond()));
-  note.Draw();
+    if (x_min_plot < x_max_plot) {
+      h_norm->GetXaxis()->SetRangeUser(x_min_plot, x_max_plot);
+    }
+    h_norm->GetYaxis()->SetRangeUser(0.0, 2.0);
 
-  TString outpdf = TString::Format("%sALL_chavg_lightyield_history_2D_6h.pdf", PATH_OUT_LY.c_str());
-  c.SaveAs(outpdf);
+    h_norm->Draw("COLZ");
+    h_norm->GetYaxis()->SetTitleOffset(1.1);
+
+    TDatime now;
+    TPaveText note(0.75, 0.85, 0.99, 0.99, "NDC");
+    note.SetFillColor(0);
+    note.SetTextAlign(12);
+    note.AddText("Run: ALL (6h bins)");
+    note.AddText(Form("Entries: %lld", npoints_norm));
+    note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                      now.GetYear(), now.GetMonth(), now.GetDay(),
+                      now.GetHour(), now.GetMinute(), now.GetSecond()));
+    note.Draw();
+
+    TString outpdf = TString::Format("%sALL_chavg_lightyield_history_2D_6h_norm.pdf", PATH_OUT_LY.c_str());
+    c.SaveAs(outpdf);
+  } else {
+    ::Info("dataqualityplot",
+           "Skip normalized history plot: reference CSV or cablenum mapping is not available.");
+  }
 }
 
 // ------------------------
@@ -1215,6 +1678,9 @@ static bool RunPdfsExist(const std::string& runTag)
                                    runTag.c_str(), p);
     if (!fileExists(name.Data())) return false;
   }
+
+  // Per-cablenum CSV (avg LY and #entries with LY>=10)
+  if (!fileExists(PATH_OUT_LY + runTag + "_chavg_lightyield.csv")) return false;
 
   return true;
 }
@@ -1268,6 +1734,9 @@ static void MakeRunPdfs(const std::string& runTag,
     AccumulateLyAvgPerChannel(sum, cnt, fi.path);
   }
   BuildAndSaveLyAvgHist(sum, cnt, runTag);
+
+  // Write per-cablenum CSV (avg LY and #entries with LY>=10)
+  BuildAndSaveChAvgLightyieldCsv(runTag, stableFiles, sum, cnt);
 
   // LY profiles vs position (average LY and #events with ly>=10 p.e.)
   BuildAndSaveLyVsPosition(runTag, stableFiles, sum, cnt);
@@ -1330,7 +1799,7 @@ static void OneIteration(int refresh_ms) {
     }
   }
 
-  // 2. Backfill older runs: if some run does not have all PDFs yet, create them once.
+  // 2. Backfill older runs: if some run does not have all outputs yet, create them once.
   {
     // Collect unique run tags (excluding the latest run), in descending mtime order.
     std::vector<std::string> runTags;
@@ -1362,6 +1831,9 @@ static void OneIteration(int refresh_ms) {
 
   // 3. Lightyield history (6-hour bins, all runs) is updated incrementally as before.
   BuildAndSaveLyAvgHistory2D_Binned();
+
+  // 4. Calibration base reference gain stability (all runs)
+  BuildAndSaveBaseRefGainHistory();
 
   gSystem->Sleep(refresh_ms);
 }
