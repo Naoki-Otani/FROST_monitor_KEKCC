@@ -96,6 +96,14 @@ static const int MAX_TIME_DIFF = FrostmonConfig::MAX_TIME_DIFF; // seconds
 static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold for event
 
 // ------------------------
+// BSD time cut (hardcoded Unix time)
+// ------------------------
+
+// Keep only spills with trg_sec >= 2026/01/10 00:00:00 JST.
+// 2026/01/10 00:00:00 JST = 2026/01/09 15:00:00 UTC = 1767970800
+static const long long BSD_CUT_START_SEC = 1767970800LL;
+
+// ------------------------
 // Small helpers
 // ------------------------
 
@@ -423,6 +431,12 @@ static void LoadAllBsdSpills(std::vector<BsdSpill>& bsd_spills,
       s.good_spill_flag = good_spill_flag;
       s.spill_flag      = spill_flag;
       s.trg_sec         = trg_sec_arr[2];             // trg_sec[2]
+
+      // Skip spills earlier than the configured start time.
+      if (static_cast<long long>(s.trg_sec) < BSD_CUT_START_SEC) {
+        continue;
+      }
+
       s.pot             = ct_np[4][0];                // total POT (all bunches)
 
       // Store POT per bunch: ct_np[4][1]..ct_np[4][8]

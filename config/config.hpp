@@ -4,7 +4,7 @@
 
 namespace FrostmonConfig {
 // ----- Path configurations -----
-    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c";
+    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c2";
 
     // Default chmap file name (used when rules are not available)
     const std::string CHMAP_FILE = "chmap_20251122.txt";
