@@ -1527,17 +1527,39 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   long long npoints = 0;
   long long npoints_norm = 0;
   for (long long bin = bin_min; bin <= bin_max; ++bin) {
-    long long total_cnt_in_bin = 0;
+    // long long total_cnt_in_bin = 0;
+    // for (int ch = 0; ch < NOUT; ++ch) {
+    //   const auto it = bins.find(key_bin_ch(bin, ch));
+    //   if (it != bins.end()) {
+    //     total_cnt_in_bin += it->second.cnt;
+    //   }
+    // }
+
+    // // Skip bins where the total number of ly>=10 p.e. entries
+    // // in this 6-hour window is too small (i.e. beam-off periods).
+    // if (total_cnt_in_bin < MIN_COUNTS_PER_BIN) continue;
+
+    // Require at least this many channels to have enough statistics in the bin.
+    static const int MIN_GOOD_CHANNELS = 5;
+
+    int n_good_ch = 0;
     for (int ch = 0; ch < NOUT; ++ch) {
       const auto it = bins.find(key_bin_ch(bin, ch));
-      if (it != bins.end()) {
-        total_cnt_in_bin += it->second.cnt;
+      if (it == bins.end()) continue;
+
+      // Count this channel as "good" if its entry count in this 6-hour bin
+      // is greater than or equal to the threshold.
+      if (it->second.cnt >= MIN_COUNTS_PER_BIN) {
+        ++n_good_ch;
+
+        // Skip this time bin if fewer than MIN_GOOD_CHANNELS channels have enough entries.
+        // This removes low-statistics (e.g., beam-off) periods from the plot.
+        if (n_good_ch >= MIN_GOOD_CHANNELS) break;
       }
     }
 
-    // Skip bins where the total number of ly>=10 p.e. entries
-    // in this 6-hour window is too small (i.e. beam-off periods).
-    if (total_cnt_in_bin < MIN_COUNTS_PER_BIN) continue;
+    if (n_good_ch < MIN_GOOD_CHANNELS) continue;
+
 
     const double t = static_cast<double>(bin) * BINW_SEC;
     for (int ch = 0; ch < NOUT; ++ch) {
@@ -1566,7 +1588,8 @@ static void BuildAndSaveLyAvgHistory2D_Binned()
   gStyle->SetOptStat(0);
 
   // X range cut for display (local time)
-  const double t_cut  = unixTimeLocal(2025, 11, 29, 18, 0, 0);
+  // const double t_cut  = unixTimeLocal(2025, 11, 29, 18, 0, 0);
+  const double t_cut  = unixTimeLocal(2026, 1, 17, 9, 0, 0);
   const double x_min_plot = std::max(tmin, t_cut);
   const double x_max_plot = tmax;
 

@@ -101,15 +101,15 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
      - `processed_files.tsv` — remember processed files and their modification times.
      - `chavg_bins.tsv` — per-bin, per-channel `(sum, count)` accumulators.
    - Fill rule (per 6-hour bin):
-     - First, for each 6-hour bin, sum `count` over **all channels** for values `≥ 10 p.e.`  
-       (this corresponds to summing the `cnt` column in `chavg_bins.tsv` over all channels
-       at a given time bin).
-     - If this **total count** in the bin is **greater than or equal to** `MIN_COUNTS_PER_BIN`
-       (configured as `FrostmonConfig::MIN_COUNTS_PER_BIN` in the code), the bin is considered
-       to have sufficient beam activity and is **filled**.
+     - First, for each 6-hour bin, count how many channels have `count >= MIN_COUNTS_PER_BIN`
+       for values `≥ 10 p.e.`  
+       (i.e., for a given time bin, count channels whose `cnt` entry in `chavg_bins.tsv`
+       is **greater than or equal to** `MIN_COUNTS_PER_BIN`).
+     - If the number of such channels is **greater than or equal to** `MIN_GOOD_CHANNELS` (currently **5**),
+       the bin is considered to have sufficient beam activity and is **filled**.
        For such bins, **all channels** are filled: channels with no data in that bin get
        `average = 0` (to monitor potential dead channels).
-     - If the total count in a bin is **below** `MIN_COUNTS_PER_BIN`, that 6-hour bin is treated
+     - If fewer than `MIN_GOOD_CHANNELS` channels meet `count >= MIN_COUNTS_PER_BIN`, that 6-hour bin is treated
        as a beam-off / low-statistics period and is **skipped entirely** (no entries are filled).
      - The X-axis time range of this plot is currently restricted to **events with unix time ≥ 2025-11-29 18:00 (local time)**.
      This cut is applied only to the **display range**; all bins are still accumulated internally.

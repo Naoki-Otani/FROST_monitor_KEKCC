@@ -104,6 +104,14 @@ static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold f
 static const long long BSD_CUT_START_SEC = 1767970800LL;
 
 // ------------------------
+// Event-rate plot time cut (hardcoded Unix time)
+// ------------------------
+// Keep only points with time >= 2026/01/17 00:00:00 JST.
+// 2026/01/17 00:00:00 JST = 2026/01/16 15:00:00 UTC = 1768575600
+static const long long EVENT_CUT_START_SEC = 1768575600LL;
+
+
+// ------------------------
 // Small helpers
 // ------------------------
 
@@ -1132,6 +1140,7 @@ static void BuildAndSaveEventRatePlot()
     double t = 0.0, p = 0.0;
     if (!(iss >> t >> p)) continue;
     if (!std::isfinite(t) || !std::isfinite(p)) continue;
+    if (static_cast<long long>(t) < EVENT_CUT_START_SEC) continue; // Apply time cut for event-rate plot
 
     std::time_t tt = static_cast<std::time_t>(t);
     std::tm lt{};
@@ -1165,6 +1174,7 @@ static void BuildAndSaveEventRatePlot()
     double t = 0.0;
     if (!(iss >> t)) continue;
     if (!std::isfinite(t)) continue;
+    if (static_cast<long long>(t) < EVENT_CUT_START_SEC) continue; // Apply time cut for event-rate plot
 
     std::time_t tt = static_cast<std::time_t>(t);
     std::tm lt{};
@@ -1356,6 +1366,7 @@ static void BuildAndSaveEventRatePlotSpill()
     double t = 0.0, p = 0.0;
     if (!(iss >> t >> p)) continue;
     if (!std::isfinite(t) || !std::isfinite(p)) continue;
+    if (static_cast<long long>(t) < EVENT_CUT_START_SEC) continue; // Apply time cut for event-rate plot
 
     std::time_t tt = static_cast<std::time_t>(t);
     std::tm lt{};
@@ -1389,6 +1400,7 @@ static void BuildAndSaveEventRatePlotSpill()
     double t = 0.0;
     if (!(iss >> t)) continue;
     if (!std::isfinite(t)) continue;
+    if (static_cast<long long>(t) < EVENT_CUT_START_SEC) continue; // Apply time cut for event-rate plot
 
     std::time_t tt = static_cast<std::time_t>(t);
     std::tm lt{};

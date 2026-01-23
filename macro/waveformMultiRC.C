@@ -26,6 +26,8 @@ void waveform_impl(TString filename,
                    const std::vector<int>& local_list,
                    int ev_start=0)
 {
+    const double MaxADCThreshold = 600.0;
+
     // キャンバスを8分割
     TCanvas *c1 = new TCanvas("c1", "c1", 1200, 800);
     c1->Divide(4,2); // 最大8分割固定
@@ -74,13 +76,42 @@ void waveform_impl(TString filename,
         std::cout << "==== Event " << iEntry << " ====" << std::endl;
         t->GetEntry(iEntry);
 
-        // 各padをクリア
+        // // 各padをクリア
+        // for(int ipad=1; ipad<=8; ++ipad){
+        //     c1->cd(ipad);
+        //     gPad->Clear();
+        //     gPad->SetGridx(); gPad->SetGridy();
+        // }
+ // ---- 追加：指定したchのどれかが MaxADC > threshold なら描画、そうでなければ次イベント ----
+        bool doDraw = false;
+        std::vector<double> max_adc_cache(chs.size(), 0.0);
+        for(size_t idx=0; idx<chs.size() && idx<8; ++idx){
+            int ch_idx = chs[idx];
+            if(!waveform) continue;
+            if((int)waveform->size() <= ch_idx) continue;
+            if((int)(*waveform)[ch_idx].size() < NSAMPLE) continue;
+
+            double m = (*waveform)[ch_idx][0];
+            for(int j=1; j<NSAMPLE; ++j){
+                if((*waveform)[ch_idx][j] > m) m = (*waveform)[ch_idx][j];
+            }
+            max_adc_cache[idx] = m;
+            if(m > MaxADCThreshold){
+                doDraw = true;
+                break;
+            }
+        }
+
+        if(!doDraw){
+            continue;
+        }
+
+        // 各padをクリア（描画するイベントだけ）
         for(int ipad=1; ipad<=8; ++ipad){
             c1->cd(ipad);
             gPad->Clear();
             gPad->SetGridx(); gPad->SetGridy();
         }
-
         // chごとに描画
         for(size_t idx=0; idx<chs.size() && idx<8; ++idx){
             c1->cd((int)idx+1);
@@ -107,10 +138,19 @@ void waveform_impl(TString filename,
             }
             if(counter > 0) cons /= counter;
 
-            // Max ADC
-            double max_adc = 0.0;
-            for (int j = 0; j < NSAMPLE; ++j) {
-                if ((*waveform)[ch_idx][j] > max_adc) max_adc = (*waveform)[ch_idx][j];
+            // // Max ADC
+            // double max_adc = 0.0;
+            // for (int j = 0; j < NSAMPLE; ++j) {
+            //     if ((*waveform)[ch_idx][j] > max_adc) max_adc = (*waveform)[ch_idx][j];
+            // }
+
+            // Max ADC（事前計算した値を使う。無ければ従来通り計算）
+            double max_adc = (idx < max_adc_cache.size()) ? max_adc_cache[idx] : 0.0;
+            if(idx >= max_adc_cache.size()){
+                max_adc = 0.0;
+                for (int j = 0; j < NSAMPLE; ++j) {
+                    if ((*waveform)[ch_idx][j] > max_adc) max_adc = (*waveform)[ch_idx][j];
+                }
             }
 
             // 積分
