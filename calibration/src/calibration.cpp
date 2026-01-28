@@ -343,8 +343,8 @@ void calibrayraw_(TString filename, TString chmapPath, TString outputcsv, TStrin
       double peakX1 = xs.empty() ? h->GetBinCenter(h->GetMaximumBin())
                                  : (xs.size() >= 2 ? xs[1] : xs[0]);
 
-      const double fitmin1 = peakX1 - 15.0;
-      const double fitmax1 = peakX1 + 15.0;
+      const double fitmin1 = peakX1 - 20.0;
+      const double fitmax1 = peakX1 + 20.0;
 
       TF1* f1 = new TF1(Form("f1_p%02d_ch%02d", p+1, lc), "gaus", fitmin1, fitmax1);
       f1->SetLineColor(kRed+1);

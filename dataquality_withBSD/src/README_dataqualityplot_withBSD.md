@@ -163,6 +163,41 @@ File format (whitespace-separated columns):
 
 ---
 
+## Time Cuts
+
+Time-based cuts are applied to exclude early or unstable periods from the
+analysis. The cut start times are configured centrally via `FrostmonConfig`
+and used consistently throughout the program.
+
+### 1) BSD time cut
+Only BSD spills satisfying the following condition are used:
+
+```text
+trg_sec >= BSD_CUT_START_SEC
+```
+
+This cut affects all BSD-based calculations, including:
+- delivered/recorded POT accumulation
+- efficiency calculation
+- missed-spill list generation
+
+`BSD_CUT_START_SEC` is taken from:
+- `FrostmonConfig::BSD_CUT_START_SEC`
+
+### 2) Event-rate plot time cut
+For event-rate plots (both per-bunch and per-spill), only events/points with:
+
+```text
+time >= EVENT_CUT_START_SEC
+```
+
+are counted/kept in the event-rate time series and histograms.
+
+`EVENT_CUT_START_SEC` is taken from:
+- `FrostmonConfig::EVENT_CUT_START_SEC`
+
+---
+
 ## Matching Logic
 
 Every lightyield event is matched to a BSD spill via:
@@ -171,7 +206,7 @@ Every lightyield event is matched to a BSD spill via:
 2. Find BSD spills with identical 15-bit spill number  
 3. Choose:
    ```
-   |bsd.trg_sec – round(unixtime[0])| ≤ 5 seconds
+   |bsd.trg_sec – round(unixtime[0])| ≤ 3000 seconds
    ```
    with minimal |Δt|
 4. POT from a BSD spill is counted **once per LY file**

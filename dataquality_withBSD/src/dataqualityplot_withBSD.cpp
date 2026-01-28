@@ -96,19 +96,17 @@ static const int MAX_TIME_DIFF = FrostmonConfig::MAX_TIME_DIFF; // seconds
 static const Double_t LIGHTMAX_MIN = FrostmonConfig::LIGHTMAX_MIN; //threshold for event
 
 // ------------------------
-// BSD time cut (hardcoded Unix time)
+// BSD time cut
 // ------------------------
 
-// Keep only spills with trg_sec >= 2026/01/10 00:00:00 JST.
-// 2026/01/10 00:00:00 JST = 2026/01/09 15:00:00 UTC = 1767970800
-static const long long BSD_CUT_START_SEC = 1767970800LL;
+// Keep only spills with trg_sec >= BSD_CUT_START_SEC
+static const long long BSD_CUT_START_SEC = FrostmonConfig::BSD_CUT_START_SEC;
 
 // ------------------------
-// Event-rate plot time cut (hardcoded Unix time)
+// Event-rate plot time cut
 // ------------------------
-// Keep only points with time >= 2026/01/17 00:00:00 JST.
-// 2026/01/17 00:00:00 JST = 2026/01/16 15:00:00 UTC = 1768575600
-static const long long EVENT_CUT_START_SEC = 1768575600LL;
+// Keep only points with time >= EVENT_CUT_START_SEC
+static const long long EVENT_CUT_START_SEC = FrostmonConfig::EVENT_CUT_START_SEC;
 
 
 // ------------------------
