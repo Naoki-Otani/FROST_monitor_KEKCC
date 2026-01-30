@@ -46,6 +46,9 @@ static const Int_t    NBINS_ADC = FrostmonConfig::NBINS_ADC;
 static const Double_t XMIN_ADC  = FrostmonConfig::XMIN_ADC;
 static const Double_t XMAX_ADC  = FrostmonConfig::XMAX_ADC;
 
+// Spill histogram settings
+static const Int_t    SPILL_MOD = FrostmonConfig::SPILL_MOD;  // number of spill bins (bin width = 1)
+
 // Lightyield settings
 static const Int_t    NOUT       = FrostmonConfig::NOUT;
 static const Int_t    NBUNCH     = FrostmonConfig::NBUNCH;
@@ -77,6 +80,7 @@ static const std::string PATH_REF_LY = FrostmonConfig::OUTPUT_DIR + "/dataqualit
 static const Int_t BASEREF_CALIB_CABLENUM = FrostmonConfig::BASEREF_CALIB_CABLENUM;
 static const std::string PATH_CALIBRES = FrostmonConfig::OUTPUT_DIR + "/calibration/calibresult/";
 static const std::string PATH_OUT_CALIB = FrostmonConfig::OUTPUT_DIR + "/dataquality/gain/";
+
 // I/O paths
 static const std::string PATH_ROOT     = FrostmonConfig::OUTPUT_DIR + "/rootfile_aftercalib/";
 static const std::string PATH_OUT_TDC  = FrostmonConfig::OUTPUT_DIR + "/dataquality/tdc/";
@@ -1325,6 +1329,82 @@ static void BuildAndSaveSpillnum(const std::string& runTag, const std::vector<Fi
   c.SaveAs(outpdf);
 }
 
+// Fill a histogram of "Number of events per spill number".
+static void AccumulateSpillCount(TH1D* h, const std::string& path) {
+  if (!h) return;
+
+  TFile fin(path.c_str(), "READ");
+  if (fin.IsZombie()) return;
+
+  TTree* t = (TTree*)fin.Get(TREE_NAME);
+  if (!t) { fin.Close(); return; }
+
+  t->SetBranchStatus("*", 0);
+
+  Int_t spillnum = -1;
+  if (!t->GetBranch("spillnum")) { fin.Close(); return; }
+
+  t->SetBranchStatus("spillnum", 1);
+  t->SetBranchAddress("spillnum", &spillnum);
+
+  const Long64_t nent = t->GetEntries();
+  for (Long64_t ie = 0; ie < nent; ++ie) {
+    t->GetEntry(ie);
+
+    // Keep only valid spill numbers in [0, SPILL_MOD-1].
+    if (spillnum < 0 || spillnum >= SPILL_MOD) continue;
+
+    h->Fill(spillnum);
+  }
+
+  fin.Close();
+}
+
+// Build and save a histogram: x = spillnum, y = number of events.
+static void BuildAndSaveSpillCountHist(const std::string& runTag,
+                                       const std::vector<FileInfoLite>& stableFiles)
+{
+  gSystem->mkdir(PATH_OUT_SPILLNUM.c_str(), true);
+
+  // nbins = SPILL_MOD, range = [0, SPILL_MOD], so bin width = 1.
+  std::unique_ptr<TH1D> h(new TH1D(
+      "h_nevents_per_spillnum",
+      "Number of events per spill number;Spill number;Number of events",
+      SPILL_MOD, 0.0, (double)SPILL_MOD));
+
+  h->SetLineWidth(2);
+  h->SetFillColor(kGray);
+  h->SetStats(0);
+  h->SetMinimum(0.0);
+
+  for (const auto& fi : stableFiles) {
+    AccumulateSpillCount(h.get(), fi.path);
+  }
+
+  TCanvas c("c_spill_hist", "events vs spillnum (hist)", 1000, 700);
+  c.SetGrid();
+  c.SetLeftMargin(0.12);
+  c.SetBottomMargin(0.12);
+
+  h->Draw("HIST");
+
+  TDatime now;
+  TPaveText note(0.8, 0.9, 0.99, 0.99, "NDC");
+  note.SetFillColor(0);
+  note.SetTextAlign(12);
+  note.AddText(Form("Run: %s", runTag.c_str()));
+  note.AddText(Form("Entries: %.0f", h->GetEntries()));
+  note.AddText(Form("Updated: %04d/%02d/%02d %02d:%02d:%02d",
+                    now.GetYear(), now.GetMonth(), now.GetDay(),
+                    now.GetHour(), now.GetMinute(), now.GetSecond()));
+  note.Draw();
+
+  // Save to the same directory as "evnum vs spillnum".
+  TString outpdf = TString::Format("%s%s_nevents_per_spillnum_hist.pdf",
+                                   PATH_OUT_SPILLNUM.c_str(), runTag.c_str());
+  c.SaveAs(outpdf);
+}
+
 // ------------------------
 // 6-hour binned LY history
 // ------------------------
@@ -1694,6 +1774,9 @@ static bool RunPdfsExist(const std::string& runTag)
   // evnum vs spillnum
   if (!fileExists(PATH_OUT_SPILLNUM + runTag + "_evnum_vs_spillnum.pdf")) return false;
 
+  // Histogram: number of events per spillnum
+  if (!fileExists(PATH_OUT_SPILLNUM + runTag + "_nevents_per_spillnum_hist.pdf")) return false;
+
   // RAYRAW-wise per-channel lightyield PDFs
   for (int p = 1; p <= FrostmonConfig::N_RAYRAW; ++p) {
     TString name = TString::Format("%s%s_RAYRAW#%02d.pdf",
@@ -1775,6 +1858,10 @@ static void MakeRunPdfs(const std::string& runTag,
 
   // evnum vs spillnum
   BuildAndSaveSpillnum(runTag, stableFiles);
+
+  // Histogram: number of events per spillnum
+  BuildAndSaveSpillCountHist(runTag, stableFiles);
+
 }
 
 // ------------------------

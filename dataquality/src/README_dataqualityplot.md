@@ -95,7 +95,18 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/spillnum/runXXXXX_evnum_vs_spillnum.pdf`
 
-9. **Average lightyield history 2D (all runs, 6-hour bins)**  
+9. **Number of events per spillnum histogram (latest run)**
+   - Build a 1D histogram where:
+     - X axis: `spillnum`
+     - Y axis: number of events
+   - Histogram binning:
+     - X range: `0 .. FrostmonConfig::SPILL_MOD`
+     - Number of bins: `FrostmonConfig::SPILL_MOD` (i.e. bin width = 1)
+
+   Output (PDF):
+   - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/spillnum/runXXXXX_nevents_per_spillnum_hist.pdf`
+
+10. **Average lightyield history 2D (all runs, 6-hour bins)**  
    - Accumulates per (time-bin, channel) the average of values **≥ 10 p.e.** across **all files** in the directory.  
    - Uses two on-disk caches for incremental updates:
      - `processed_files.tsv` — remember processed files and their modification times.
@@ -119,7 +130,7 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h_norm.pdf`  
      (Normalized by a reference average lightyield per cablenum; see “Reference lightyield CSV” below.)
 
-10. **Normalized average lightyield history 2D (all runs, 6-hour bins)**  
+11. **Normalized average lightyield history 2D (all runs, 6-hour bins)**  
    - If a reference CSV is available (see below), the program also produces a normalized version:
      `normalized = (average lightyield in the 6-hour bin) / (reference average lightyield for that cablenum)`.
    - The display range and the 6-hour bin fill/skip rule are the same as feature 9.
@@ -128,7 +139,7 @@ It is a standalone C++ program that uses ROOT libraries (no ROOT macro).
    Output (PDF):
    - `/group/nu/ninja/work/otani/FROST_beamdata/e71c/dataquality/lightyield/ALL_chavg_lightyield_history_2D_6h_norm.pdf`
 
-11. **Calibration base-reference gain stability (all runs)**  
+12. **Calibration base-reference gain stability (all runs)**  
    The program monitors the gain stability of a fixed “base reference” calibration channel
    specified by `FrostmonConfig::BASEREF_CALIB_CABLENUM` (a `cablenum` value).
 
