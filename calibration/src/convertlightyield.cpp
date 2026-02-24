@@ -616,6 +616,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   auto   out_hit_bunch = new std::vector<std::vector<double>>();
   auto   out_undershoot_bunch = new std::vector<std::vector<double>>();
   auto   out_overlapped_bunch = new std::vector<std::vector<double>>();
+  auto   out_waveform  = new std::vector<std::vector<double>>();
   auto   out_leading  = new std::vector<std::vector<double>>();
   auto   out_trailing = new std::vector<std::vector<double>>();
   auto   out_leading_fromadc  = new std::vector<std::vector<double>>();
@@ -634,6 +635,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
   tout.Branch("hit_bunch",  &out_hit_bunch);
   tout.Branch("undershoot_bunch", &out_undershoot_bunch);
   tout.Branch("overlapped_bunch", &out_overlapped_bunch);
+  tout.Branch("waveform",  &out_waveform);
   tout.Branch("leading",  &out_leading);
   tout.Branch("trailing", &out_trailing);
   tout.Branch("leading_fromadc",  &out_leading_fromadc);
@@ -658,6 +660,7 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
     out_hit_bunch->assign(NOUT, std::vector<double>());
     out_undershoot_bunch->assign(NOUT, std::vector<double>());
     out_overlapped_bunch->assign(NOUT, std::vector<double>());
+    out_waveform->assign(NOUT, std::vector<double>());
     out_leading->assign(NOUT, std::vector<double>());
     out_trailing->assign(NOUT, std::vector<double>());
     out_leading_fromadc->assign(NOUT, std::vector<double>());
@@ -710,6 +713,9 @@ static void convertlightyield_rayraw_(const char* infile, const char* outfile,
 
         const auto& wf = waveform->at(ch);
         const int ns = (int)wf.size();
+
+        // Store waveform reordered by idx (CAB_ORDER index), not by original channel index.
+        (*out_waveform)[idx] = wf;
 
         // Calculate leading/trailing indices from ADC threshold
         auto leading_adc  = calculate_leading_fromadc(wf);

@@ -444,9 +444,20 @@ For each run `<RUNNAME>`:
     - `undershoot_bunch`      – bunch indices whose integration window overlaps an undershoot region  
     - `overlapped_bunch`      – bunch indices whose integration window significantly overlaps a neighboring hit or undershoot  
 
+  - Raw waveforms:
+    - `waveform`              – ADC waveform stored as `vector<vector<double>>` (outer index = cable index in `CAB_ORDER`)
+
   - Timing information from ADC and existing branches:
-    - `leading`, `trailing`                      (copied from input, if present)  
+    - `leading`, `trailing`                      (copied from input if present, **and reordered into idx order**)   
     - `leading_fromadc`, `trailing_fromadc`      (computed from ADC threshold crossings)
+
+### Note on per-channel ordering (idx / CAB_ORDER)
+
+All per-channel vector branches are stored in **idx order** (outer index = cable index in `CAB_ORDER`),
+not in the original input channel (`ch`) order. This includes:
+- `waveform`
+- `leading`, `trailing`, `leading_fromadc`, `trailing_fromadc`
+- `hit_bunch`, `undershoot_bunch`, `overlapped_bunch`
 
 The calibration CSV (`calib_<RUNNAME>.csv`) and reference gain CSV are used to compute **raw** per-channel light yield,
 which is then multiplied by a **per-cable correction factor** from `lightyield_correctionfactor.csv`.

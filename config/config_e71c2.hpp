@@ -4,7 +4,7 @@
 
 namespace FrostmonConfig {
 // ----- Path configurations -----
-    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c";
+    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c2";
 
     // Default chmap file name (used when rules are not available)
     const std::string CHMAP_FILE = "chmap_20251122.txt";
@@ -121,7 +121,7 @@ namespace FrostmonConfig {
     static const Int_t SPILL_MOD = 32768;  // 2^15
     static const Int_t MAX_TIME_DIFF = 3000;  // ±3000 sec allowance between BSD and LY unixtime
 
-    static const long long BSD_CUT_START_SEC   = 1764028800LL; // 2025/11/25 09:00 JST
-    static const long long EVENT_CUT_START_SEC = 1764028800LL; // 2025/11/25 09:00 JST
+    static const long long BSD_CUT_START_SEC   = 1768262400LL; // 2026/01/13 09:00 JST
+    static const long long EVENT_CUT_START_SEC = 1768575600LL; // 2026/01/17 00:00 JST
 
 }

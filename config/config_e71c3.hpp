@@ -4,7 +4,7 @@
 
 namespace FrostmonConfig {
 // ----- Path configurations -----
-    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c";
+    const std::string OUTPUT_DIR = "/group/nu/ninja/work/otani/FROST_beamdata/e71c3";
 
     // Default chmap file name (used when rules are not available)
     const std::string CHMAP_FILE = "chmap_20251122.txt";
@@ -111,7 +111,7 @@ namespace FrostmonConfig {
 
     static const Double_t XG_WEIGHT = 4.0;        // weight exponent
     // static const Double_t LIGHTMAX_MIN = 10.0;    // threshold for xg–yg selection and threshold for neutrino event
-    static const Double_t LIGHTMAX_MIN = 20.0;
+    static const Double_t LIGHTMAX_MIN = 20.0;    // threshold for xg–yg selection and threshold for neutrino event
 
     // 6-hour binning for LY history
     static const Double_t BINW_SEC = 6.0 * 3600.0;
@@ -121,7 +121,6 @@ namespace FrostmonConfig {
     static const Int_t SPILL_MOD = 32768;  // 2^15
     static const Int_t MAX_TIME_DIFF = 3000;  // ±3000 sec allowance between BSD and LY unixtime
 
-    static const long long BSD_CUT_START_SEC   = 1764028800LL; // 2025/11/25 09:00 JST
-    static const long long EVENT_CUT_START_SEC = 1764028800LL; // 2025/11/25 09:00 JST
-
+    static const long long BSD_CUT_START_SEC = 1769558400LL; // 2026/01/28 09:00 JST
+    static const long long EVENT_CUT_START_SEC = 1769558400LL; // 2026/01/28 09:00 JST
 }
